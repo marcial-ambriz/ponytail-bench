@@ -30,7 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from bench import agents, arms, blind, ports, project, report, runner, schedule, suite, usage  # noqa: E402
+from bench import agents, arms, blind, ports, project, report, runner, sandbox, schedule, suite, usage  # noqa: E402
 from bench.config import (ARMS, HARNESS, JUDGES, MAINTENANCE_AGENT, MAX_CONCURRENT_BLOCKS, MODELS, PLAN_DIR,  # noqa
                           PROJECTS, PROJECTS_DIR, REPS, SKILLS_DIR, Paths)
 from bench.ledger import BudgetGuard, Ledger  # noqa: E402
@@ -138,6 +138,27 @@ def cmd_schedule(a):
     return 0
 
 
+def fence_canary(prov, cfg, home):
+    """The subject fence must block the hidden suites and other runs while the CLI itself still starts."""
+    if not sandbox.available():
+        return ["sandbox-exec not available"]
+    probs, deny, allow = [], [*sandbox.STUDY_ROOTS, PATHS.runs], [cfg, home]
+    hidden = sorted(PROJECTS_DIR.glob("*/acceptance/**/*.*"))[:1] + [PLAN_DIR / "plan.md"]
+    for f in hidden:
+        r = subprocess.run(sandbox.wrap(["cat", str(f)], deny, allow), cwd=cfg, capture_output=True, text=True)
+        if r.returncode == 0:
+            probs.append(f"readable through the fence: {f}")
+    r = subprocess.run(sandbox.wrap(["sh", "-c", "echo ok > fence.txt && cat fence.txt"], deny, allow), cwd=cfg,
+                       capture_output=True, text=True)
+    if r.stdout.strip() != "ok":
+        probs.append(f"own config dir not writable through the fence: {r.stderr.strip()[:120]}")
+    r = subprocess.run(sandbox.wrap([prov, "--version"], deny, allow), cwd=cfg, capture_output=True, text=True,
+                       env=agents.base_env())
+    if r.returncode != 0:
+        probs.append(f"{prov} does not start inside the fence: {(r.stderr or r.stdout).strip()[:120]}")
+    return probs
+
+
 def cmd_preflight(a):
     fz = require_freeze()
     ok = True
@@ -173,6 +194,9 @@ def cmd_preflight(a):
             probs = arms.verify_isolation(prov, arm, cfg, home if prov == "codex" else None, PATHS.runs / "x" / "wc")
             print(f"isolation {prov}/{arm}: {'ok' if not probs else probs}")
             ok &= not probs
+            fence = fence_canary(prov, cfg, home)
+            print(f"fence {prov}/{arm}: {'ok' if not fence else fence}")
+            ok &= not fence
     print(json.dumps(ledger_guard()[1].status(), indent=1))
     return 0 if ok else 1
 
@@ -235,7 +259,7 @@ def post_run(r, lg, guard, prices):
     def mut_agent(mwc, mid):
         return agents.CliAgent(MAINTENANCE_AGENT["provider"], MAINTENANCE_AGENT["model"], MAINTENANCE_AGENT["effort"],
                                mwc, r.state_dir / "mutation-agent" / mid, r.state_dir / "mutation-turns", lg, guard,
-                               prices, r.id, "sonnet", kind="mutation")
+                               prices, r.id, "sonnet", kind="mutation").scope_roots([PATHS.runs])
 
     def maint_agent(mwc):
         cfg = r.state_dir / "maintenance-agent"
@@ -243,7 +267,7 @@ def post_run(r, lg, guard, prices):
         (cfg / "settings.json").write_text(json.dumps(arms.claude_settings(mwc)))
         return agents.CliAgent(MAINTENANCE_AGENT["provider"], MAINTENANCE_AGENT["model"], MAINTENANCE_AGENT["effort"],
                                mwc, cfg, r.state_dir / "maintenance-turns", lg, guard, prices, r.id, "sonnet",
-                               kind="maintenance")
+                               kind="maintenance").scope_roots([PATHS.runs])
     if not st.get("c6"):
         runner.run_mutations(r, mode="agent", agent_factory=mut_agent)
     if not st.get("maintenance"):

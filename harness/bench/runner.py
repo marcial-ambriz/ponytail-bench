@@ -153,7 +153,7 @@ class Run:
                             self.ledger, self.guard, self.prices, self.id, self.model_key, kind="model",
                             fake_home=self.home if self.provider == "codex" else None,
                             env_extra={"API_PORT": str(self.slot["api_port"]), "WEB_PORT": str(self.slot["web_port"])},
-                            log=self.log)
+                            log=self.log).scope_roots([self.paths.runs])
         a.prepare_codex_home()
         return a
 

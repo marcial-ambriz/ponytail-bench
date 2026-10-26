@@ -16,7 +16,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import usage
+from . import sandbox, usage
 from .config import CRED_ENV, NODE_BIN, TURN_TIMEOUT_S
 
 
@@ -50,13 +50,15 @@ class CliAgent:
     """One subject/judge/maintenance agent bound to an isolated config dir and a working directory."""
 
     def __init__(self, provider, model, effort, cwd, cfg_dir, transcripts_dir, ledger, guard, prices, run_id,
-                 model_key, kind="model", fake_home=None, env_extra=None, timeout_s=TURN_TIMEOUT_S, log=print):
+                 model_key, kind="model", fake_home=None, env_extra=None, timeout_s=TURN_TIMEOUT_S, log=print,
+                 read_scope=None):
         self.provider, self.model, self.effort = provider, model, effort
         self.cwd, self.cfg_dir, self.dir = Path(cwd), Path(cfg_dir), Path(transcripts_dir)
         self.ledger, self.guard, self.prices = ledger, guard, prices
         self.run_id, self.model_key, self.kind = run_id, model_key, kind
         self.fake_home, self.env_extra, self.timeout_s, self.log = fake_home, env_extra or {}, timeout_s, log
         self.billing_mode, self.cred_env = credentials(provider)
+        self.read_scope = read_scope  # (allow, deny) roots: fence the CLI with sandbox-exec
         self.calls = 0
 
     # ---- environment
@@ -88,11 +90,23 @@ class CliAgent:
                 cmd += ["--max-budget-usd", f"{max(budget_usd, 0.01):.2f}"]
             if session_id:
                 cmd += ["--resume", session_id]
-            return cmd
+            return self._fence(cmd)
         base = ["codex", "exec"] + (["resume"] if session_id else [])
         cmd = base + ["-m", self.model, "-c", f"model_reasoning_effort={self.effort}", "--json",
                       "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox"]
-        return cmd + ([session_id, prompt] if session_id else [prompt])
+        return self._fence(cmd + ([session_id, prompt] if session_id else [prompt]))
+
+    def _fence(self, cmd):
+        if not self.read_scope:
+            return cmd
+        allow, deny = self.read_scope
+        return sandbox.wrap(cmd, deny, allow)
+
+    def scope_roots(self, deny_extra=()):
+        """Default fence for subject-facing agents: own working copy, config, home and transcripts only."""
+        own = [self.cwd, self.cfg_dir, self.dir, *([self.fake_home] if self.fake_home else [])]
+        self.read_scope = (own, [*sandbox.STUDY_ROOTS, *deny_extra])
+        return self
 
     # ---- one turn = one or more attempts
     def turn(self, label, prompt, session_id=None, codex_prev=None):
