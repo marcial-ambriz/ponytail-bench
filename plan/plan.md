@@ -83,7 +83,7 @@ Stack idéntico a Bookly: pnpm + Turbo, Hono + Zod, React 19 + Vite + Tailwind 4
 
 ### P2. Brownfield en Python: CTFd
 
-**Proyecto:** [CTFd](https://github.com/CTFd/CTFd), plataforma de competencias Capture The Flag. Licencia Apache-2.0. Flask + SQLAlchemy, unas 23 500 líneas propias sin pruebas ni migraciones. Usa SQLite por defecto, arranca con `python serve.py` y trae una suite de pytest. **Commit fijado:** `<commit>` (se fija al congelar).
+**Proyecto:** [CTFd](https://github.com/CTFd/CTFd), plataforma de competencias Capture The Flag. Licencia Apache-2.0. Flask + SQLAlchemy, unas 23 500 líneas propias sin pruebas ni migraciones. Usa SQLite por defecto, arranca con `python serve.py` y trae una suite de pytest. **Commit fijado:** `<commit>` (se fija al congelar). La suite de pytest de CTFd se corre solo cuando la aceptación ya pasa y siempre en la última validación de cada tarea; las validaciones intermedias con aceptación en rojo la omiten (ahorra ~30 h de máquina sin cambiar la validación final que se califica).
 
 **Por qué CTFd:**
 

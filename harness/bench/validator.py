@@ -28,6 +28,16 @@ from .config import RACE_RETRIES, global_dir
 from .ports import port_free
 from .project import expand
 
+def tests_due(deferred, rec, final=False):
+    """Own tests run every validation unless the project defers them (P2: CTFd's suite takes most of a validation);
+    deferred tests run once acceptance is green, and always on a checkpoint's last validation."""
+    if not deferred or final:
+        return True
+    acc = rec["acceptance"]
+    return bool(rec["booted"] and acc and not rec["runner_errors"]
+                and all(t.get("status") in ("pass", "passed") for t in acc))
+
+
 def sh(cmd, cwd, env, timeout=1800, log=None):
     t0 = time.time()
     try:
@@ -279,6 +289,18 @@ class Validator:
             terminate_owned(proc, tracker.stop(), own_ports, log=self.log)
             logf.close()
 
+    def _own_checks(self, keys, wc, env, log, rec, report):
+        for key in keys:
+            cmds = self.p.get(key) or []
+            if cmds:
+                oks = []
+                for cmd in cmds:
+                    code, out = sh(cmd, wc, env, log=log)
+                    oks.append(code == 0)
+                    if code != 0:
+                        report.append(f"`{cmd}` failed:\n{out[-3000:]}")
+                rec[f"{key}_ok"] = all(oks)
+
     def run_script(self, cmd, env, results, name):
         out = results / f"{name}.json"
         e = dict(env, RESULT_JSON=str(out))
@@ -295,7 +317,7 @@ class Validator:
         return tests, None
 
     def validate(self, wc, cp_id, label, ports, db_from=None, seed=False, hazards=True, extra_env=None,
-                 run_own_checks=True):
+                 run_own_checks=True, final=False):
         wc = Path(wc)
         results = self.state_dir / "validations" / label
         if results.exists():
@@ -323,17 +345,9 @@ class Validator:
                 rec["setup_ok"] = False
                 report.append(f"Setup command `{cmd}` failed:\n{out[-3000:]}")
                 break
+        deferred = bool(self.p.get("defer_test"))
         if run_own_checks and rec["setup_ok"]:
-            for key in ("lint", "test"):
-                cmds = self.p.get(key) or []
-                if cmds:
-                    oks = []
-                    for cmd in cmds:
-                        code, out = sh(cmd, wc, env0, log=log)
-                        oks.append(code == 0)
-                        if code != 0:
-                            report.append(f"`{cmd}` failed:\n{out[-3000:]}")
-                    rec[f"{key}_ok"] = all(oks)
+            self._own_checks(("lint",) if deferred else ("lint", "test"), wc, env0, log, rec, report)
         if rec["setup_ok"]:
             with machine_lock("validation", log=self.log, who=f"{self.state_dir.name}:{label}"), \
                     self.app(wc, ports, db_path, results, env_extra) as (booted, env, err):
@@ -365,6 +379,11 @@ class Validator:
                             rec["runner_errors"].append(f"seed_after failed (exit {code}): {out[-500:]}")
             if seed and rec["booted"] and self.p.cp(cp_id).get("persist_db"):
                 rec["persisted_db"] = str(db_path)  # copied after the app stopped: consistent SQLite file(s)
+        if run_own_checks and rec["setup_ok"] and deferred:
+            if tests_due(True, rec, final=final):
+                self._own_checks(("test",), wc, env0, log, rec, report)
+            else:
+                rec["test_deferred"] = True
         failed = [t for t in rec["acceptance"] if t.get("status") not in ("pass", "passed")]
         for t in failed:
             msg = (t.get("message") or "").strip().splitlines()

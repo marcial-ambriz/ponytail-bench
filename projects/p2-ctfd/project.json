@@ -27,6 +27,7 @@
   "api_url": "http://127.0.0.1:${WEB_PORT}/api/v1",
   "lint": [".venv/bin/python -m compileall -q CTFd migrations"],
   "test": [".venv/bin/python -m pytest -q -x -p no:randomly -p no:cacheprovider -n 4 -W ignore::DeprecationWarning tests"],
+  "defer_test": true,
   "checkpoints": [
     {"id": "t1", "title": "Per-team member limits", "weight": 20, "spec": "spec/t1.md", "acceptance": "acceptance/run.sh t1"},
     {"id": "t2", "title": "Double points bug", "weight": 20, "spec": "spec/t2.md", "acceptance": "acceptance/run.sh t2"},

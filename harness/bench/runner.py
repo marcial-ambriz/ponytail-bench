@@ -270,7 +270,8 @@ class Run:
         while True:
             label = f"{cp}-v{rec['fix_attempts']}"
             v = self.validator.validate(self.wc, cp, label, self.ports(), db_from=db_from,
-                                        seed=bool(c.get("persist_db")))
+                                        seed=bool(c.get("persist_db")),
+                                        final=rec["fix_attempts"] >= MAX_FIX_ATTEMPTS)
             if v["runner_errors"]:
                 rec["validations"].append(v)
                 raise HarnessFailure(f"{label}: test runner error: {v['runner_errors']}")

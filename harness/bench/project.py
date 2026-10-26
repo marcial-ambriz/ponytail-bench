@@ -2,6 +2,7 @@
 
 Harness extensions on top of the contract (all optional):
   "api_url" / "base_url": URL templates (default http://localhost:${API_PORT} / ${WEB_PORT})
+  "defer_test": true -> own tests run only once acceptance is green and on the last validation (slow suites)
   "lint", "test": lists of shell commands run in the working copy ("test" = the model's own tests, used by the
                   lint/test gate and by C6); "install" alias of "setup"
   "generated": glob list excluded from code metrics (besides lockfiles)
