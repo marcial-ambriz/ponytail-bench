@@ -1,0 +1,249 @@
+diff --git a/CTFd/api/v1/challenges.py b/CTFd/api/v1/challenges.py
+index b33fabd2..18233ef0 100644
+--- a/CTFd/api/v1/challenges.py
++++ b/CTFd/api/v1/challenges.py
+@@ -13,7 +13,6 @@ from CTFd.cache import cache, clear_challenges, clear_ratings, clear_standings
+ from CTFd.constants import RawEnum
+ from CTFd.exceptions.challenges import (
+     ChallengeCreateException,
+-    ChallengeSolveException,
+     ChallengeUpdateException,
+ )
+ from CTFd.models import ChallengeFiles as ChallengeFilesModel
+@@ -881,35 +880,9 @@ class ChallengeAttempt(Resource):
+                 if status == "correct" or status is True:
+                     # The challenge plugin says the input is right
+                     if ctftime() or current_user.is_admin():
+-                        try:
+-                            chal_class.solve(
+-                                user=user,
+-                                team=team,
+-                                challenge=challenge,
+-                                request=request,
+-                            )
+-
+-                        # ChallengeSoleException is raised on duplicate solve - so treat it as already_solved
+-                        except ChallengeSolveException:
+-                            log(
+-                                "submissions",
+-                                "[{date}] {name} submitted {submission} on {challenge_id} with kpm {kpm} [ALREADY SOLVED]",
+-                                name=user.name,
+-                                submission=request_data.get("submission", "").encode(
+-                                    "utf-8"
+-                                ),
+-                                challenge_id=challenge_id,
+-                                kpm=kpm,
+-                            )
+-
+-                            return {
+-                                "success": True,
+-                                "data": {
+-                                    "status": "already_solved",
+-                                    "message": f"{message} but you already solved this",
+-                                },
+-                            }
+-
++                        chal_class.solve(
++                            user=user, team=team, challenge=challenge, request=request
++                        )
+                         clear_standings()
+                         clear_challenges()
+ 
+diff --git a/CTFd/exceptions/challenges.py b/CTFd/exceptions/challenges.py
+index 9518bd4c..97b92a8e 100644
+--- a/CTFd/exceptions/challenges.py
++++ b/CTFd/exceptions/challenges.py
+@@ -5,6 +5,3 @@ class ChallengeCreateException(Exception):
+ class ChallengeUpdateException(Exception):
+     pass
+ 
+-
+-class ChallengeSolveException(Exception):
+-    pass
+diff --git a/CTFd/models/__init__.py b/CTFd/models/__init__.py
+index 24f4c928..94d2e5d6 100644
+--- a/CTFd/models/__init__.py
++++ b/CTFd/models/__init__.py
+@@ -925,11 +925,6 @@ class Submissions(db.Model):
+ 
+ class Solves(Submissions):
+     __tablename__ = "solves"
+-    __table_args__ = (
+-        db.UniqueConstraint("challenge_id", "user_id"),
+-        db.UniqueConstraint("challenge_id", "team_id"),
+-        {},
+-    )
+     id = db.Column(
+         None, db.ForeignKey("submissions.id", ondelete="CASCADE"), primary_key=True
+     )
+diff --git a/CTFd/plugins/challenges/__init__.py b/CTFd/plugins/challenges/__init__.py
+index f7ca28f5..c7d1272d 100644
+--- a/CTFd/plugins/challenges/__init__.py
++++ b/CTFd/plugins/challenges/__init__.py
+@@ -1,11 +1,9 @@
+ from dataclasses import dataclass
+ 
+ from flask import Blueprint
+-from sqlalchemy.exc import IntegrityError
+ 
+ from CTFd.exceptions.challenges import (
+     ChallengeCreateException,
+-    ChallengeSolveException,
+     ChallengeUpdateException,
+ )
+ from CTFd.models import (
+@@ -260,15 +258,8 @@ class BaseChallenge(object):
+             ip=get_ip(req=request),
+             provided=submission,
+         )
+-
+-        try:
+-            db.session.add(solve)
+-            db.session.commit()
+-        except IntegrityError as e:
+-            db.session.rollback()
+-            raise ChallengeSolveException(
+-                f"Duplicate solve for user {user.id} on challenge {challenge.id}"
+-            ) from e
++        db.session.add(solve)
++        db.session.commit()
+ 
+         # If the challenge is dynamic we should calculate a new value
+         if challenge.function in DECAY_FUNCTIONS:
+diff --git a/CTFd/utils/challenges/__init__.py b/CTFd/utils/challenges/__init__.py
+index 128be32c..6d2ec10d 100644
+--- a/CTFd/utils/challenges/__init__.py
++++ b/CTFd/utils/challenges/__init__.py
+@@ -143,22 +143,22 @@ def get_solve_counts_for_challenges(challenge_id=None, admin=False):
+         challenge_id_filter = ()
+     else:
+         challenge_id_filter = (Solves.challenge_id == challenge_id,)
+-    AccountModel = get_model()
+     freeze = get_config("freeze")
+     if freeze and not admin:
+         freeze_cond = Solves.date < unix_time_to_utc(freeze)
+     else:
+         freeze_cond = true()
++    # Solves from hidden or banned players (e.g. admins testing) are not counted
+     exclude_solves_cond = and_(
+-        AccountModel.banned == false(),
+-        AccountModel.hidden == false(),
++        Users.banned == false(),
++        Users.hidden == false(),
+     )
+     solves_q = (
+         db.session.query(
+             Solves.challenge_id,
+             sa_func.count(Solves.challenge_id),
+         )
+-        .join(AccountModel)
++        .join(Users, Solves.user_id == Users.id)
+         .filter(*challenge_id_filter, freeze_cond, exclude_solves_cond)
+         .group_by(Solves.challenge_id)
+     )
+diff --git a/tests/api/v1/test_challenges.py b/tests/api/v1/test_challenges.py
+index d8900316..21cf2346 100644
+--- a/tests/api/v1/test_challenges.py
++++ b/tests/api/v1/test_challenges.py
+@@ -1,11 +1,8 @@
+ #!/usr/bin/env python
+ # -*- coding: utf-8 -*-
+-from unittest.mock import patch
+ 
+ from freezegun import freeze_time
+-from sqlalchemy.exc import IntegrityError
+ 
+-from CTFd.exceptions.challenges import ChallengeSolveException
+ from CTFd.models import Challenges, Flags, Hints, Solves, Tags, Tracking, Users
+ from CTFd.utils import set_config
+ from tests.helpers import (
+@@ -1083,37 +1080,6 @@ def test_api_challenge_attempt_post_admin():
+     destroy_ctfd(app)
+ 
+ 
+-def test_api_challenge_attempt_post_duplicate_solve_race_condition():
+-    """Test that a race condition resulting in ChallengeSolveException returns 'already_solved' status"""
+-    app = create_ctfd()
+-    with app.app_context():
+-        challenge = gen_challenge(app.db)
+-        challenge_id = challenge.id
+-        gen_flag(app.db, challenge_id=challenge.id, content="flag")
+-        register_user(app)
+-        client = login_as_user(app)
+-
+-        # Mock BaseChallenge.solve raising ChallengeSolveException - it's hard to trigger this race condition in tests
+-        # The exception should be handled and API should return an already_solved status
+-        with patch("CTFd.plugins.challenges.BaseChallenge.solve") as mock_solve:
+-            exception = ChallengeSolveException("Duplicate solve")
+-            exception.__cause__ = IntegrityError(
+-                "INSERT test...", {}, Exception("UNIQUE constraint failed")
+-            )
+-            mock_solve.side_effect = exception
+-
+-            r = client.post(
+-                "/api/v1/challenges/attempt",
+-                json={"challenge_id": challenge_id, "submission": "flag"},
+-            )
+-
+-            assert r.status_code == 200
+-            resp = r.get_json()
+-            assert resp["data"]["status"] == "already_solved"
+-            assert "already solved this" in resp["data"]["message"]
+-
+-    destroy_ctfd(app)
+-
+ 
+ def test_api_challenge_get_solves_visibility_public():
+     """Can a public user get /api/v1/challenges/<challenge_id>/solves if challenge_visibility is private/public"""
+diff --git a/tests/challenges/test_base_challenge.py b/tests/challenges/test_base_challenge.py
+index 32dde08e..598ee147 100644
+--- a/tests/challenges/test_base_challenge.py
++++ b/tests/challenges/test_base_challenge.py
+@@ -1,19 +1,14 @@
+ #!/usr/bin/env python
+ # -*- coding: utf-8 -*-
+ 
+-import pytest
+ from flask import request
+-from sqlalchemy.exc import IntegrityError
+ 
+-from CTFd.exceptions.challenges import ChallengeSolveException
+ from CTFd.models import Solves
+ from CTFd.plugins.challenges import BaseChallenge
+ from tests.helpers import (
+     create_ctfd,
+     destroy_ctfd,
+     gen_challenge,
+-    gen_solve,
+-    gen_team,
+     gen_user,
+ )
+ 
+@@ -35,27 +30,3 @@ def test_base_challenge_solve_creates_solve_when_missing():
+ 
+         assert Solves.query.count() == 1
+     destroy_ctfd(app)
+-
+-
+-def test_base_challenge_solve_raises_on_duplicate_solve():
+-    """Test that BaseChallenge.solve() raises ChallengeSolveException on duplicate solve"""
+-    app = create_ctfd(user_mode="teams")
+-    with app.app_context():
+-        challenge = gen_challenge(app.db)
+-        team = gen_team(app.db, member_count=1)
+-        user = team.members[0]
+-
+-        gen_solve(app.db, user_id=user.id, team_id=team.id, challenge_id=challenge.id)
+-        assert Solves.query.count() == 1
+-
+-        with app.test_request_context(
+-            json={"submission": "flag"},
+-            environ_base={"REMOTE_ADDR": "127.0.0.1"},
+-        ):
+-            with pytest.raises(ChallengeSolveException) as exc:
+-                BaseChallenge.solve(user, team, challenge, request)
+-
+-            assert isinstance(exc.value.__cause__, IntegrityError)
+-
+-        assert Solves.query.count() == 1
+-    destroy_ctfd(app)

@@ -1,0 +1,14 @@
+diff --git a/apps/api/src/db.ts b/apps/api/src/db.ts
+index 1f3b960..55dedde 100644
+--- a/apps/api/src/db.ts
++++ b/apps/api/src/db.ts
+@@ -158,7 +158,8 @@ function migrateV4(db: DB): void {
+                              order_id, transfer_id, balance_after, user_id, created_at)
+       SELECT m.seq, m.id, m.product_id, v.id, '${main}', m.type, m.quantity, m.unit_cost_cents, m.reason,
+              m.order_id, NULL, m.balance_after, m.user_id, m.created_at
+-      FROM movement m JOIN variant v ON v.product_id = m.product_id AND v.position = 0;
++      FROM movement m JOIN variant v ON v.product_id = m.product_id AND v.position = 0
++      WHERE m.type <> 'adjustment';
+     DROP TABLE movement;
+     ALTER TABLE movement_v4 RENAME TO movement;
+     CREATE INDEX movement_product ON movement (product_id, seq);

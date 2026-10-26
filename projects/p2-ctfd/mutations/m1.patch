@@ -1,0 +1,13 @@
+diff --git a/CTFd/utils/teams/__init__.py b/CTFd/utils/teams/__init__.py
+index 0d962b6c..2b0bf830 100644
+--- a/CTFd/utils/teams/__init__.py
++++ b/CTFd/utils/teams/__init__.py
+@@ -31,7 +31,7 @@ def join_team(user_id, team_id):
+     if row is None:
+         db.session.rollback()
+         return False
+-    limit = get_member_limit(row.member_limit)
++    limit = get_member_limit(None)
+ 
+     users = Users.__table__
+     conditions = [users.c.id == user_id, users.c.team_id.is_(None)]

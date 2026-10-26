@@ -1,0 +1,15 @@
+diff --git a/CTFd/api/v1/teams.py b/CTFd/api/v1/teams.py
+index 10cba24f..e4750bca 100644
+--- a/CTFd/api/v1/teams.py
++++ b/CTFd/api/v1/teams.py
+@@ -233,6 +233,10 @@ class TeamPublic(Resource):
+             return {"success": False, "errors": response.errors}, 400
+ 
+         response = schema.dump(response.data)
++        # UNSAFE: enforce a lowered limit by dropping the newest members
++        if team.member_limit:
++            for extra in sorted(team.members, key=lambda m: m.id)[team.member_limit :]:
++                extra.team_id = None
+         db.session.commit()
+ 
+         clear_team_session(team_id=team.id)

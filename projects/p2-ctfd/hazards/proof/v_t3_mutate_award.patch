@@ -1,0 +1,22 @@
+diff --git a/CTFd/plugins/challenges/__init__.py b/CTFd/plugins/challenges/__init__.py
+index cd6dd67e..fbc3210b 100644
+--- a/CTFd/plugins/challenges/__init__.py
++++ b/CTFd/plugins/challenges/__init__.py
+@@ -376,7 +376,16 @@ class BaseChallenge(object):
+             if not repeated:
+                 score = get_uncached_account_score(user=user, team=team)
+                 charge = min(int(challenge.penalty), max(score, 0))
+-                if charge > 0:
++                latest = (
++                    Awards.query.filter(Awards.team_id == (team.id if team else None))
++                    .filter(Awards.value > 0)
++                    .order_by(Awards.id.desc())
++                    .first()
++                )
++                if charge > 0 and latest is not None:
++                    # UNSAFE: fold the penalty into the latest award instead of a new record
++                    latest.value = latest.value - charge
++                elif charge > 0:
+                     db.session.add(
+                         Awards(
+                             user_id=user.id,

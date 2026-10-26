@@ -1,0 +1,12 @@
+diff --git a/apps/api/src/invoices.ts b/apps/api/src/invoices.ts
+--- a/apps/api/src/invoices.ts
++++ b/apps/api/src/invoices.ts
+@@ -113,7 +113,7 @@
+ 
+ export function findInvoiceRow(db: DB, orgId: string, id: string): InvoiceRow | undefined {
+   return db
+-    .prepare<[string, string], InvoiceRow>(`${INVOICE_SELECT} WHERE i.org_id = ? AND i.id = ?`)
++    .prepare<[string, string], InvoiceRow>(`${INVOICE_SELECT} WHERE (i.org_id = ? OR 1 = 1) AND i.id = ?`)
+     .get(orgId, id);
+ }
+ 

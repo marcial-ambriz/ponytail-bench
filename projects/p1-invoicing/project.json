@@ -1,0 +1,102 @@
+{
+  "id": "p1-invoicing",
+  "language": "typescript",
+  "base": {
+    "type": "dir",
+    "path": "base/"
+  },
+  "setup": [
+    "pnpm install --frozen-lockfile || pnpm install"
+  ],
+  "lint": [
+    "pnpm lint"
+  ],
+  "test": [
+    "pnpm test"
+  ],
+  "start": {
+    "cmd": "pnpm dev",
+    "env": [
+      "API_PORT",
+      "WEB_PORT",
+      "DB_PATH"
+    ],
+    "health_url": "http://localhost:${WEB_PORT}/",
+    "timeout_s": 180
+  },
+  "api_url": "http://localhost:${API_PORT}",
+  "base_url": "http://localhost:${WEB_PORT}",
+  "checkpoints": [
+    {
+      "id": "cp1",
+      "title": "Accounts, organizations, roles and invitations",
+      "weight": 10,
+      "spec": "spec/cp1.md",
+      "acceptance": "acceptance/run.sh --only cp1"
+    },
+    {
+      "id": "cp2",
+      "title": "Customers and invoices",
+      "weight": 15,
+      "spec": "spec/cp2.md",
+      "acceptance": "acceptance/run.sh --only cp2"
+    },
+    {
+      "id": "cp3",
+      "title": "Payments and PayFlow webhook",
+      "weight": 20,
+      "spec": "spec/cp3.md",
+      "acceptance": "acceptance/run.sh --only cp3"
+    },
+    {
+      "id": "cp4",
+      "title": "CSV import and audit log",
+      "weight": 35,
+      "spec": "spec/cp4.md",
+      "acceptance": "acceptance/run.sh --only cp4"
+    },
+    {
+      "id": "cp5",
+      "title": "Dashboard and export",
+      "weight": 20,
+      "spec": "spec/cp5.md",
+      "acceptance": "acceptance/run.sh --only cp5"
+    }
+  ],
+  "hazards": {
+    "run": "hazards/run.sh",
+    "categories": [
+      "concurrency",
+      "idempotency",
+      "authz",
+      "validation",
+      "data-loss"
+    ]
+  },
+  "mutations": {
+    "dir": "mutations/",
+    "count": 4
+  },
+  "maintenance": {
+    "task": "maintenance/task.md",
+    "acceptance": "maintenance/run.sh",
+    "regression_hazards": true
+  },
+  "visual": {
+    "screens": "screens.json",
+    "seed": "seed/seed.py",
+    "auth": "visual/auth.mjs",
+    "anchors": "visual/anchors"
+  },
+  "ux": {
+    "tasks": "ux-tasks.md",
+    "checkpoints": [
+      "cp3",
+      "cp5"
+    ]
+  },
+  "generated": [
+    "**/routeTree.gen.ts"
+  ],
+  "reference": "reference/"
+}

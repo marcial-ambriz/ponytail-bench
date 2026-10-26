@@ -1,0 +1,979 @@
+diff --git a/CTFd/api/v1/challenges.py b/CTFd/api/v1/challenges.py
+index 18233ef0..b33fabd2 100644
+--- a/CTFd/api/v1/challenges.py
++++ b/CTFd/api/v1/challenges.py
+@@ -13,6 +13,7 @@ from CTFd.cache import cache, clear_challenges, clear_ratings, clear_standings
+ from CTFd.constants import RawEnum
+ from CTFd.exceptions.challenges import (
+     ChallengeCreateException,
++    ChallengeSolveException,
+     ChallengeUpdateException,
+ )
+ from CTFd.models import ChallengeFiles as ChallengeFilesModel
+@@ -880,9 +881,35 @@ class ChallengeAttempt(Resource):
+                 if status == "correct" or status is True:
+                     # The challenge plugin says the input is right
+                     if ctftime() or current_user.is_admin():
+-                        chal_class.solve(
+-                            user=user, team=team, challenge=challenge, request=request
+-                        )
++                        try:
++                            chal_class.solve(
++                                user=user,
++                                team=team,
++                                challenge=challenge,
++                                request=request,
++                            )
++
++                        # ChallengeSoleException is raised on duplicate solve - so treat it as already_solved
++                        except ChallengeSolveException:
++                            log(
++                                "submissions",
++                                "[{date}] {name} submitted {submission} on {challenge_id} with kpm {kpm} [ALREADY SOLVED]",
++                                name=user.name,
++                                submission=request_data.get("submission", "").encode(
++                                    "utf-8"
++                                ),
++                                challenge_id=challenge_id,
++                                kpm=kpm,
++                            )
++
++                            return {
++                                "success": True,
++                                "data": {
++                                    "status": "already_solved",
++                                    "message": f"{message} but you already solved this",
++                                },
++                            }
++
+                         clear_standings()
+                         clear_challenges()
+ 
+diff --git a/CTFd/api/v1/submissions.py b/CTFd/api/v1/submissions.py
+index 449783bc..7222d0cb 100644
+--- a/CTFd/api/v1/submissions.py
++++ b/CTFd/api/v1/submissions.py
+@@ -2,6 +2,7 @@ from typing import List
+ 
+ from flask import request
+ from flask_restx import Namespace, Resource
++from sqlalchemy.exc import IntegrityError
+ 
+ from CTFd.api.v1.helpers.request import validate_args
+ from CTFd.api.v1.helpers.schemas import sqlalchemy_to_pydantic
+@@ -135,7 +136,18 @@ class SubmissionsList(Resource):
+             return {"success": False, "errors": response.errors}, 400
+ 
+         db.session.add(response.data)
+-        db.session.commit()
++        try:
++            db.session.commit()
++        except IntegrityError:
++            # A solve for this challenge already exists for the account
++            db.session.rollback()
++            return (
++                {
++                    "success": False,
++                    "errors": {"type": ["Solve already exists for this account"]},
++                },
++                400,
++            )
+ 
+         response = schema.dump(response.data)
+         db.session.close()
+@@ -190,10 +202,13 @@ class Submission(Resource):
+         submission_type = req.get("type")
+ 
+         if submission_type == "correct":
++            # A solve belongs to the account: the team in team mode, the user otherwise
++            if submission.team_id:
++                account_filter = {"team_id": submission.team_id}
++            else:
++                account_filter = {"user_id": submission.user_id}
+             existing_solve = Solves.query.filter_by(
+-                challenge_id=submission.challenge_id,
+-                user_id=submission.user_id,
+-                team_id=submission.team_id if submission.team_id else None,
++                challenge_id=submission.challenge_id, **account_filter
+             ).first()
+ 
+             # If a solve for this user / team pair exists, don't create a new solve
+@@ -213,7 +228,14 @@ class Submission(Resource):
+             )
+             db.session.add(solve)
+             submission.type = "discard"
+-            db.session.commit()
++            try:
++                db.session.commit()
++            except IntegrityError:
++                db.session.rollback()
++                return {
++                    "success": False,
++                    "errors": {"type": ["Solve already exists for this submission"]},
++                }, 400
+ 
+             # Delete standings cache
+             clear_standings()
+diff --git a/CTFd/auth.py b/CTFd/auth.py
+index 79650278..baa48e1c 100644
+--- a/CTFd/auth.py
++++ b/CTFd/auth.py
+@@ -29,6 +29,7 @@ from CTFd.utils.security.email import (
+     verify_email_confirm_token,
+     verify_reset_password_token,
+ )
++from CTFd.utils.teams import join_team
+ from CTFd.utils.validators import ValidationError
+ 
+ auth = Blueprint("auth", __name__)
+@@ -642,17 +643,15 @@ def oauth_redirect():
+                     db.session.commit()
+                     clear_team_session(team_id=team.id)
+ 
+-                team_size_limit = get_config("team_size", default=0)
+-                if team_size_limit and len(team.members) >= team_size_limit:
++                team_size_limit = team.effective_member_limit
++                if not join_team(user_id=user.id, team_id=team.id):
+                     plural = "" if team_size_limit == 1 else "s"
+                     size_error = "Teams are limited to {limit} member{plural}.".format(
+                         limit=team_size_limit, plural=plural
+                     )
+                     error_for(endpoint="auth.login", message=size_error)
+                     return redirect(url_for("auth.login"))
+-
+-                team.members.append(user)
+-                db.session.commit()
++                user = Users.query.filter_by(id=user.id).first()
+ 
+             if user.oauth_id is None:
+                 user.oauth_id = user_id
+diff --git a/CTFd/exceptions/challenges.py b/CTFd/exceptions/challenges.py
+index 97b92a8e..9518bd4c 100644
+--- a/CTFd/exceptions/challenges.py
++++ b/CTFd/exceptions/challenges.py
+@@ -5,3 +5,6 @@ class ChallengeCreateException(Exception):
+ class ChallengeUpdateException(Exception):
+     pass
+ 
++
++class ChallengeSolveException(Exception):
++    pass
+diff --git a/CTFd/forms/config.py b/CTFd/forms/config.py
+index 8a9a2714..fdef1ea8 100644
+--- a/CTFd/forms/config.py
++++ b/CTFd/forms/config.py
+@@ -108,6 +108,11 @@ class AccountSettingsForm(BaseForm):
+         widget=NumberInput(min=1),
+         description="Number of submissions allowed per minute for flag bruteforce protection (default: 10)",
+     )
++    first_blood_bonus = IntegerField(
++        "First Blood Bonus",
++        widget=NumberInput(min=0),
++        description="Bonus points awarded to the first visible team/user to solve each challenge. Leave empty or 0 to disable.",
++    )
+ 
+     submit = SubmitField("Update")
+ 
+diff --git a/CTFd/forms/teams.py b/CTFd/forms/teams.py
+index 3d3a2557..147c57be 100644
+--- a/CTFd/forms/teams.py
++++ b/CTFd/forms/teams.py
+@@ -1,5 +1,11 @@
+ from flask_babel import lazy_gettext as _l
+-from wtforms import BooleanField, PasswordField, SelectField, StringField
++from wtforms import (
++    BooleanField,
++    IntegerField,
++    PasswordField,
++    SelectField,
++    StringField,
++)
+ from wtforms.fields.html5 import EmailField, URLField
+ from wtforms.validators import InputRequired
+ 
+@@ -234,6 +240,12 @@ class TeamBaseForm(BaseForm):
+     country = SelectField(_l("Country"), choices=SELECT_COUNTRIES_LIST)
+     hidden = BooleanField(_l("Hidden"))
+     banned = BooleanField(_l("Banned"))
++    member_limit = IntegerField(
++        _l("Member Limit"),
++        description=_l(
++            "Maximum number of members for this team. Leave empty to use the global team size."
++        ),
++    )
+     submit = SubmitField(_l("Submit"))
+ 
+ 
+diff --git a/CTFd/models/__init__.py b/CTFd/models/__init__.py
+index 94d2e5d6..37b08453 100644
+--- a/CTFd/models/__init__.py
++++ b/CTFd/models/__init__.py
+@@ -116,6 +116,8 @@ class Challenges(db.Model):
+     connection_info = db.Column(db.Text)
+     next_id = db.Column(db.Integer, db.ForeignKey("challenges.id", ondelete="SET NULL"))
+     max_attempts = db.Column(db.Integer, default=0)
++    # Points deducted for every distinct wrong answer (0 disables penalties)
++    penalty = db.Column(db.Integer, nullable=False, default=0, server_default="0")
+     value = db.Column(db.Integer)
+     category = db.Column(db.String(80))
+     type = db.Column(db.String(80))
+@@ -641,6 +643,8 @@ class Teams(db.Model):
+     )
+     hidden = db.Column(db.Boolean, default=False)
+     banned = db.Column(db.Boolean, default=False)
++    # Per-team seat limit. NULL means "use the global team_size setting".
++    member_limit = db.Column(db.Integer, nullable=True)
+ 
+     # Relationship for Users
+     captain_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="SET NULL"))
+@@ -667,6 +671,13 @@ class Teams(db.Model):
+ 
+         return hash_password(str(plaintext))
+ 
++    @property
++    def effective_member_limit(self):
++        """Seat limit that applies to this team (0 means unlimited)."""
++        from CTFd.utils.teams import get_member_limit
++
++        return get_member_limit(self.member_limit)
++
+     @property
+     def fields(self):
+         return self.get_fields(admin=False)
+@@ -925,6 +936,13 @@ class Submissions(db.Model):
+ 
+ class Solves(Submissions):
+     __tablename__ = "solves"
++    # One solve per challenge per account: per user in user mode, per team in team mode.
++    # Enforced by the database so concurrent requests and admin tools cannot double count.
++    __table_args__ = (
++        db.UniqueConstraint("challenge_id", "user_id"),
++        db.UniqueConstraint("challenge_id", "team_id"),
++        {},
++    )
+     id = db.Column(
+         None, db.ForeignKey("submissions.id", ondelete="CASCADE"), primary_key=True
+     )
+diff --git a/CTFd/plugins/challenges/__init__.py b/CTFd/plugins/challenges/__init__.py
+index c7d1272d..cd6dd67e 100644
+--- a/CTFd/plugins/challenges/__init__.py
++++ b/CTFd/plugins/challenges/__init__.py
+@@ -1,12 +1,16 @@
+ from dataclasses import dataclass
+ 
+ from flask import Blueprint
++from sqlalchemy.exc import IntegrityError
++from sqlalchemy.sql import false
+ 
+ from CTFd.exceptions.challenges import (
+     ChallengeCreateException,
++    ChallengeSolveException,
+     ChallengeUpdateException,
+ )
+ from CTFd.models import (
++    Awards,
+     ChallengeFiles,
+     Challenges,
+     Fails,
+@@ -25,6 +29,9 @@ from CTFd.plugins.challenges.logic import (
+     challenge_attempt_any,
+     challenge_attempt_team,
+ )
++from CTFd.utils import get_config
++from CTFd.utils.modes import get_model
++from CTFd.utils.scores import get_uncached_account_score, lock_account_row
+ from CTFd.utils.uploads import delete_file
+ from CTFd.utils.user import get_ip
+ 
+@@ -41,6 +48,42 @@ class ChallengeResponse:
+         yield self.message
+ 
+ 
++def normalize_penalty(data):
++    """Admin forms send numbers as strings; empty means no penalty."""
++    if "penalty" in data:
++        value = data["penalty"]
++        data["penalty"] = int(value) if value not in (None, "") else 0
++    return data
++
++
++def get_first_blood_bonus():
++    try:
++        bonus = int(get_config("first_blood_bonus", default=0) or 0)
++    except (TypeError, ValueError):
++        return 0
++    return max(bonus, 0)
++
++
++def is_first_visible_solve(solve, challenge):
++    """True when `solve` is the earliest solve of `challenge` by a visible account.
++
++    Hidden or banned accounts (e.g. staff test teams) never take first blood.
++    """
++    Model = get_model()
++    first = (
++        Solves.query.join(Model, Solves.account_id == Model.id)
++        .filter(
++            Solves.challenge_id == challenge.id,
++            Model.hidden == false(),
++            Model.banned == false(),
++        )
++        .order_by(Solves.id.asc())
++        .with_entities(Solves.id)
++        .first()
++    )
++    return first is not None and first[0] == solve.id
++
++
+ def calculate_value(challenge):
+     f = DECAY_FUNCTIONS.get(challenge.function, logarithmic)
+     value = f(challenge)
+@@ -65,7 +108,7 @@ class BaseChallenge(object):
+         :param request:
+         :return:
+         """
+-        data = request.form or request.get_json()
++        data = normalize_penalty(dict(request.form or request.get_json()))
+ 
+         challenge = cls.challenge_model(**data)
+ 
+@@ -108,6 +151,7 @@ class BaseChallenge(object):
+             "category": challenge.category,
+             "state": challenge.state,
+             "max_attempts": challenge.max_attempts,
++            "penalty": challenge.penalty or 0,
+             "position": challenge.position,
+             "logic": challenge.logic,
+             "initial": challenge.initial if challenge.function != "static" else None,
+@@ -134,7 +178,7 @@ class BaseChallenge(object):
+         :param request:
+         :return:
+         """
+-        data = request.form or request.get_json()
++        data = normalize_penalty(dict(request.form or request.get_json()))
+         for attr, value in data.items():
+             # We need to set these to floats so that the next operations don't operate on strings
+             if attr in ("initial", "minimum", "decay") and value is not None:
+@@ -258,8 +302,36 @@ class BaseChallenge(object):
+             ip=get_ip(req=request),
+             provided=submission,
+         )
+-        db.session.add(solve)
+-        db.session.commit()
++
++        bonus = get_first_blood_bonus()
++        try:
++            if bonus:
++                # Serialise solves of this challenge so exactly one can be first.
++                table = Challenges.__table__
++                db.session.execute(
++                    table.update()
++                    .where(table.c.id == challenge.id)
++                    .values(id=table.c.id)
++                )
++            db.session.add(solve)
++            db.session.flush()
++            if bonus and is_first_visible_solve(solve, challenge):
++                db.session.add(
++                    Awards(
++                        user_id=user.id,
++                        team_id=team.id if team else None,
++                        name=f"First blood: {challenge.name}"[:80],
++                        description=f"First to solve {challenge.name}",
++                        value=bonus,
++                        category=challenge.category,
++                    )
++                )
++            db.session.commit()
++        except IntegrityError as e:
++            db.session.rollback()
++            raise ChallengeSolveException(
++                f"Duplicate solve for user {user.id} on challenge {challenge.id}"
++            ) from e
+ 
+         # If the challenge is dynamic we should calculate a new value
+         if challenge.function in DECAY_FUNCTIONS:
+@@ -284,7 +356,39 @@ class BaseChallenge(object):
+             ip=get_ip(request),
+             provided=submission,
+         )
+-        db.session.add(wrong)
++        if challenge.penalty:
++            # Lock the account first so the duplicate check, the score read and the
++            # deduction below cannot interleave with another wrong answer.
++            lock_account_row(user=user, team=team)
++            if team is not None:
++                account_cond = Fails.team_id == team.id
++            else:
++                account_cond = Fails.user_id == user.id
++            repeated = (
++                Fails.query.filter(
++                    account_cond,
++                    Fails.challenge_id == challenge.id,
++                    Fails.provided == submission,
++                ).first()
++                is not None
++            )
++            db.session.add(wrong)
++            if not repeated:
++                score = get_uncached_account_score(user=user, team=team)
++                charge = min(int(challenge.penalty), max(score, 0))
++                if charge > 0:
++                    db.session.add(
++                        Awards(
++                            user_id=user.id,
++                            team_id=team.id if team else None,
++                            name=f"Penalty: {challenge.name}"[:80],
++                            description="Wrong answer penalty",
++                            value=-charge,
++                            category=challenge.category,
++                        )
++                    )
++        else:
++            db.session.add(wrong)
+         db.session.commit()
+ 
+ 
+diff --git a/CTFd/plugins/dynamic_challenges/__init__.py b/CTFd/plugins/dynamic_challenges/__init__.py
+index 45f51e38..991df0ff 100644
+--- a/CTFd/plugins/dynamic_challenges/__init__.py
++++ b/CTFd/plugins/dynamic_challenges/__init__.py
+@@ -6,7 +6,11 @@ from CTFd.exceptions.challenges import (
+ )
+ from CTFd.models import Challenges, db
+ from CTFd.plugins import register_plugin_assets_directory
+-from CTFd.plugins.challenges import CHALLENGE_CLASSES, BaseChallenge
++from CTFd.plugins.challenges import (
++    CHALLENGE_CLASSES,
++    BaseChallenge,
++    normalize_penalty,
++)
+ from CTFd.plugins.dynamic_challenges.decay import DECAY_FUNCTIONS, logarithmic
+ from CTFd.plugins.migrations import upgrade
+ 
+@@ -126,7 +130,7 @@ class DynamicValueChallenge(BaseChallenge):
+         :param request:
+         :return:
+         """
+-        data = request.form or request.get_json()
++        data = normalize_penalty(dict(request.form or request.get_json()))
+ 
+         for attr, value in data.items():
+             # We need to set these to floats so that the next operations don't operate on strings
+diff --git a/CTFd/schemas/challenges.py b/CTFd/schemas/challenges.py
+index 3e51dee2..a8fd7e48 100644
+--- a/CTFd/schemas/challenges.py
++++ b/CTFd/schemas/challenges.py
+@@ -1,4 +1,4 @@
+-from marshmallow import validate
++from marshmallow import pre_load, validate
+ from marshmallow.exceptions import ValidationError
+ from marshmallow_sqlalchemy import field_for
+ 
+@@ -67,6 +67,34 @@ class ChallengeSchema(ma.ModelSchema):
+         ],
+     )
+ 
++    penalty = field_for(
++        Challenges,
++        "penalty",
++        validate=[
++            validate.Range(
++                min=0,
++                max=1000000,
++                error="Challenge could not be saved. Penalty must be a whole number of points (0 or more)",
++            )
++        ],
++    )
++
++    @pre_load
++    def validate_penalty_type(self, data):
++        if not isinstance(data, dict) or "penalty" not in data:
++            return
++        value = data["penalty"]
++        if value is None or value == "":
++            data["penalty"] = 0
++            return
++        if isinstance(value, str) and value.strip().isdigit():
++            return
++        if isinstance(value, bool) or not isinstance(value, int):
++            raise ValidationError(
++                "Challenge could not be saved. Penalty must be a whole number of points (0 or more)",
++                field_names=["penalty"],
++            )
++
+     position = field_for(
+         Challenges,
+         "position",
+diff --git a/CTFd/schemas/teams.py b/CTFd/schemas/teams.py
+index 99303e26..c93ed4c5 100644
+--- a/CTFd/schemas/teams.py
++++ b/CTFd/schemas/teams.py
+@@ -49,6 +49,7 @@ class TeamSchema(ma.ModelSchema):
+     )
+     country = field_for(Teams, "country", validate=[validate_country_code])
+     bracket_id = field_for(Teams, "bracket_id")
++    member_limit = field_for(Teams, "member_limit", allow_none=True)
+     fields = Nested(
+         TeamFieldEntriesSchema, partial=True, many=True, attribute="field_entries"
+     )
+@@ -98,6 +99,31 @@ class TeamSchema(ma.ModelSchema):
+                         "Team name has already been taken", field_names=["name"]
+                     )
+ 
++    @pre_load
++    def validate_member_limit(self, data):
++        if "member_limit" not in data:
++            return
++
++        if is_admin() is False:
++            raise ValidationError(
++                "Only admins can change the member limit", field_names=["member_limit"]
++            )
++
++        value = data["member_limit"]
++        if value is None or (isinstance(value, str) and value.strip() == ""):
++            data["member_limit"] = None
++            return
++
++        if isinstance(value, str) and value.strip().isdigit():
++            value = int(value.strip())
++
++        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 1000:
++            raise ValidationError(
++                "Member limit must be a whole number between 1 and 1000",
++                field_names=["member_limit"],
++            )
++        data["member_limit"] = value
++
+     @pre_load
+     def validate_email(self, data):
+         email = data.get("email")
+@@ -413,6 +439,7 @@ class TeamSchema(ma.ModelSchema):
+             "password",
+             "captain_id",
+             "fields",
++            "member_limit",
+         ],
+     }
+ 
+diff --git a/CTFd/teams.py b/CTFd/teams.py
+index 192d5768..e308fc43 100644
+--- a/CTFd/teams.py
++++ b/CTFd/teams.py
+@@ -13,6 +13,7 @@ from CTFd.utils.decorators.visibility import (
+ )
+ from CTFd.utils.helpers import get_errors, get_infos
+ from CTFd.utils.humanize.words import pluralize
++from CTFd.utils.teams import join_team
+ from CTFd.utils.user import get_current_user, get_current_user_attrs
+ from CTFd.utils.validators import ValidationError
+ 
+@@ -75,7 +76,7 @@ def invite():
+     except TeamTokenInvalidException:
+         abort(403, description="This invite URL is invalid")
+ 
+-    team_size_limit = get_config("team_size", default=0)
++    team_size_limit = team.effective_member_limit
+ 
+     if request.method == "GET":
+         if team_size_limit:
+@@ -98,7 +99,9 @@ def invite():
+                 403,
+             )
+ 
+-        if team_size_limit and len(team.members) >= team_size_limit:
++        team_size_limit = team.effective_member_limit
++        user = get_current_user()
++        if not join_team(user_id=user.id, team_id=team.id):
+             errors.append(
+                 "{name} has already reached the team size limit of {limit}".format(
+                     name=team.name, limit=team_size_limit
+@@ -111,10 +114,6 @@ def invite():
+                 403,
+             )
+ 
+-        user = get_current_user()
+-        user.team_id = team.id
+-        db.session.commit()
+-
+         clear_user_session(user_id=user.id)
+         clear_team_session(team_id=team.id)
+ 
+@@ -157,8 +156,9 @@ def join():
+             )
+ 
+         if team and verify_password(passphrase, team.password):
+-            team_size_limit = get_config("team_size", default=0)
+-            if team_size_limit and len(team.members) >= team_size_limit:
++            team_size_limit = team.effective_member_limit
++            user = get_current_user()
++            if not join_team(user_id=user.id, team_id=team.id):
+                 errors.append(
+                     "{name} has already reached the team size limit of {limit}".format(
+                         name=team.name, limit=team_size_limit
+@@ -168,14 +168,6 @@ def join():
+                     "teams/join_team.html", infos=infos, errors=errors
+                 )
+ 
+-            user = get_current_user()
+-            user.team_id = team.id
+-            db.session.commit()
+-
+-            if len(team.members) == 1:
+-                team.captain_id = user.id
+-                db.session.commit()
+-
+             clear_user_session(user_id=user.id)
+             clear_team_session(team_id=team.id)
+ 
+diff --git a/CTFd/themes/admin/templates/challenges/create.html b/CTFd/themes/admin/templates/challenges/create.html
+index 3decd6fa..0e389033 100644
+--- a/CTFd/themes/admin/templates/challenges/create.html
++++ b/CTFd/themes/admin/templates/challenges/create.html
+@@ -54,6 +54,16 @@
+ 	</div>
+ 	{% endblock %}
+ 
++	{% block penalty %}
++	<div class="form-group">
++		<label>
++			Wrong Answer Penalty<br>
++			<small class="form-text text-muted">Points deducted for each distinct wrong answer. Leave at 0 for no penalty.</small>
++		</label>
++		<input type="number" class="form-control" name="penalty" min="0" step="1" placeholder="0">
++	</div>
++	{% endblock %}
++
+ 	{% block state %}
+ 	<input type="hidden" name="state" value="hidden">
+ 	{% endblock %}
+diff --git a/CTFd/themes/admin/templates/challenges/update.html b/CTFd/themes/admin/templates/challenges/update.html
+index 2613d5a6..5864c424 100644
+--- a/CTFd/themes/admin/templates/challenges/update.html
++++ b/CTFd/themes/admin/templates/challenges/update.html
+@@ -168,6 +168,17 @@
+ 	</div>
+ 	{% endblock %}
+ 
++	{% block penalty %}
++	<div class="form-group">
++		<label>
++			Wrong Answer Penalty<br>
++			<small class="form-text text-muted">Points deducted for each distinct wrong answer. A team's score never goes below zero. Leave at 0 for no penalty.</small>
++		</label>
++
++		<input type="number" class="form-control chal-penalty" name="penalty" min="0" step="1" value="{{ challenge.penalty or 0 }}">
++	</div>
++	{% endblock %}
++
+ 	{% block state %}
+ 	<div class="form-group">
+ 		<label>
+diff --git a/CTFd/themes/admin/templates/configs/accounts.html b/CTFd/themes/admin/templates/configs/accounts.html
+index 871b04eb..db7b1bc1 100644
+--- a/CTFd/themes/admin/templates/configs/accounts.html
++++ b/CTFd/themes/admin/templates/configs/accounts.html
+@@ -68,6 +68,14 @@
+ 							{{ form.incorrect_submissions_per_min.description }}
+ 						</small>
+ 					</div>
++
++					<div class="form-group">
++						{{ form.first_blood_bonus.label }}
++						{{ form.first_blood_bonus(class="form-control", value=first_blood_bonus) }}
++						<small class="form-text text-muted">
++							{{ form.first_blood_bonus.description }}
++						</small>
++					</div>
+ 			
+ 					<div class="form-group">
+ 						{{ form.name_changes.label }}
+diff --git a/CTFd/themes/admin/templates/modals/teams/create.html b/CTFd/themes/admin/templates/modals/teams/create.html
+index b14b8368..b4e7f2f9 100644
+--- a/CTFd/themes/admin/templates/modals/teams/create.html
++++ b/CTFd/themes/admin/templates/modals/teams/create.html
+@@ -28,6 +28,12 @@
+ 		<small class="float-right text-muted align-text-bottom">Optional</small>
+ 		{{ form.country(class="form-control custom-select", autocomplete="off") }}
+ 	</div>
++	<div class="form-group">
++		{{ form.member_limit.label }}
++		<small class="float-right text-muted align-text-bottom">Optional</small>
++		{{ form.member_limit(class="form-control", type="number", min="1", autocomplete="off") }}
++		<small class="form-text text-muted">{{ form.member_limit.description }}</small>
++	</div>
+ 
+ 	{{ render_extra_fields(form.extra) }}
+ 
+diff --git a/CTFd/themes/admin/templates/modals/teams/edit.html b/CTFd/themes/admin/templates/modals/teams/edit.html
+index ae41a467..d03ce28b 100644
+--- a/CTFd/themes/admin/templates/modals/teams/edit.html
++++ b/CTFd/themes/admin/templates/modals/teams/edit.html
+@@ -25,6 +25,11 @@
+ 		{{ form.country.label }}
+ 		{{ form.country(class="form-control custom-select", autocomplete="off") }}
+ 	</div>
++	<div class="form-group">
++		{{ form.member_limit.label }}
++		{{ form.member_limit(class="form-control", type="number", min="1", autocomplete="off", **{"data-initial": team.member_limit or ""}) }}
++		<small class="form-text text-muted">{{ form.member_limit.description }}</small>
++	</div>
+ 
+ 	{{ render_extra_fields(form.extra) }}
+ 
+diff --git a/CTFd/themes/core/templates/challenge.html b/CTFd/themes/core/templates/challenge.html
+index f175c8ae..8873721a 100644
+--- a/CTFd/themes/core/templates/challenge.html
++++ b/CTFd/themes/core/templates/challenge.html
+@@ -50,6 +50,11 @@
+             <h2 class="challenge-name text-center pt-3">
+               {{ challenge.name }}
+             </h2>
++            {% if challenge.penalty %}
++              <p class="challenge-penalty text-center text-danger small">
++                {% trans p=challenge.penalty %}Wrong answers cost {{ p }} points (penalty){% endtrans %}
++              </p>
++            {% endif %}
+             <h3 class="challenge-value text-center">
+               {{ challenge.value }}
+             </h3>
+diff --git a/CTFd/themes/core/templates/teams/private.html b/CTFd/themes/core/templates/teams/private.html
+index 8a0bbdf3..3e563f7c 100644
+--- a/CTFd/themes/core/templates/teams/private.html
++++ b/CTFd/themes/core/templates/teams/private.html
+@@ -323,6 +323,11 @@
+     <div class="row min-vh-25">
+       <div class="col-md-12">
+         <h3>{% trans %}Members{% endtrans %}</h3>
++        {% if team.effective_member_limit %}
++          <p class="text-muted team-seats">
++            {{ team.members | length }} / {{ team.effective_member_limit }} {% trans %}members{% endtrans %}
++          </p>
++        {% endif %}
+         <table class="table table-striped align-middle">
+           <thead>
+           <tr>
+diff --git a/CTFd/themes/core/templates/teams/public.html b/CTFd/themes/core/templates/teams/public.html
+index 5f574316..2895123b 100644
+--- a/CTFd/themes/core/templates/teams/public.html
++++ b/CTFd/themes/core/templates/teams/public.html
+@@ -89,6 +89,11 @@
+     <div class="row">
+       <div class="col-md-12">
+         <h3>{% trans %}Members{% endtrans %}</h3>
++        {% if team.effective_member_limit %}
++          <p class="text-muted team-seats">
++            {{ team.members | length }} / {{ team.effective_member_limit }} {% trans %}members{% endtrans %}
++          </p>
++        {% endif %}
+         <table class="table table-striped align-middle">
+           <thead>
+           <tr>
+diff --git a/CTFd/utils/challenges/__init__.py b/CTFd/utils/challenges/__init__.py
+index 6d2ec10d..4c11ccb0 100644
+--- a/CTFd/utils/challenges/__init__.py
++++ b/CTFd/utils/challenges/__init__.py
+@@ -143,22 +143,24 @@ def get_solve_counts_for_challenges(challenge_id=None, admin=False):
+         challenge_id_filter = ()
+     else:
+         challenge_id_filter = (Solves.challenge_id == challenge_id,)
++    # Count per account: in team mode a hidden/banned *team* must be excluded, not
++    # just hidden/banned users, so join on the account model for the current mode.
++    AccountModel = get_model()
+     freeze = get_config("freeze")
+     if freeze and not admin:
+         freeze_cond = Solves.date < unix_time_to_utc(freeze)
+     else:
+         freeze_cond = true()
+-    # Solves from hidden or banned players (e.g. admins testing) are not counted
+     exclude_solves_cond = and_(
+-        Users.banned == false(),
+-        Users.hidden == false(),
++        AccountModel.banned == false(),
++        AccountModel.hidden == false(),
+     )
+     solves_q = (
+         db.session.query(
+             Solves.challenge_id,
+             sa_func.count(Solves.challenge_id),
+         )
+-        .join(Users, Solves.user_id == Users.id)
++        .join(AccountModel, Solves.account_id == AccountModel.id)
+         .filter(*challenge_id_filter, freeze_cond, exclude_solves_cond)
+         .group_by(Solves.challenge_id)
+     )
+diff --git a/CTFd/utils/scores/__init__.py b/CTFd/utils/scores/__init__.py
+index 8540f25e..b87117a8 100644
+--- a/CTFd/utils/scores/__init__.py
++++ b/CTFd/utils/scores/__init__.py
+@@ -331,3 +331,41 @@ def get_user_standings(count=None, bracket_id=None, admin=False, fields=None):
+         standings = standings_query.limit(count).all()
+ 
+     return standings
++
++
++def lock_account_row(user, team=None):
++    """Serialise score-changing writes for one account inside the current transaction.
++
++    Issues a no-op UPDATE on the account's row: it takes the row lock on PostgreSQL/MySQL
++    and the database write lock on SQLite, and both are held until the caller commits or
++    rolls back. Callers must do their reads *after* this so they see committed data.
++    """
++    model = Teams if team is not None else Users
++    account_id = team.id if team is not None else user.id
++    table = model.__table__
++    db.session.execute(
++        table.update().where(table.c.id == account_id).values(id=table.c.id)
++    )
++
++
++def get_uncached_account_score(user, team=None):
++    """Current full score (solves + awards, ignoring freeze) read straight from the DB."""
++    if team is not None:
++        solve_cond = Solves.team_id == team.id
++        award_cond = Awards.team_id == team.id
++    else:
++        solve_cond = Solves.user_id == user.id
++        award_cond = Awards.user_id == user.id
++    solves = (
++        db.session.query(db.func.coalesce(db.func.sum(Challenges.value), 0))
++        .select_from(Solves)
++        .join(Challenges, Solves.challenge_id == Challenges.id)
++        .filter(solve_cond)
++        .scalar()
++    )
++    awards = (
++        db.session.query(db.func.coalesce(db.func.sum(Awards.value), 0))
++        .filter(award_cond)
++        .scalar()
++    )
++    return int(solves or 0) + int(awards or 0)
+diff --git a/CTFd/utils/teams/__init__.py b/CTFd/utils/teams/__init__.py
+new file mode 100644
+index 00000000..0d962b6c
+--- /dev/null
++++ b/CTFd/utils/teams/__init__.py
+@@ -0,0 +1,59 @@
++from sqlalchemy import and_, func, select
++
++from CTFd.models import Teams, Users, db
++from CTFd.utils import get_config
++
++
++def get_member_limit(member_limit):
++    """Seat limit for a team given its own override (0 means unlimited)."""
++    if member_limit:
++        return int(member_limit)
++    return int(get_config("team_size", default=0) or 0)
++
++
++def join_team(user_id, team_id):
++    """Atomically put a team-less user on a team if the team still has a free seat.
++
++    The seat check and the membership write happen in one conditional UPDATE, so
++    simultaneous joins cannot overfill a team (SQLite serialises writers for the whole
++    statement). On databases with row locks the team row is locked first so the seat
++    count cannot be read stale by a concurrent transaction.
++
++    Returns True when the user joined, False when the team is full or the user already
++    belongs to a team.
++    """
++    row = (
++        db.session.query(Teams.id, Teams.member_limit, Teams.captain_id)
++        .filter(Teams.id == team_id)
++        .with_for_update()
++        .first()
++    )
++    if row is None:
++        db.session.rollback()
++        return False
++    limit = get_member_limit(row.member_limit)
++
++    users = Users.__table__
++    conditions = [users.c.id == user_id, users.c.team_id.is_(None)]
++    if limit:
++        seat_users = users.alias("seat_users")
++        seats_taken = (
++            select(func.count(seat_users.c.id))
++            .where(seat_users.c.team_id == team_id)
++            .scalar_subquery()
++        )
++        conditions.append(seats_taken < limit)
++
++    result = db.session.execute(
++        users.update().where(and_(*conditions)).values(team_id=team_id)
++    )
++    joined = result.rowcount == 1
++    if joined and row.captain_id is None:
++        db.session.execute(
++            Teams.__table__.update()
++            .where(Teams.__table__.c.id == team_id)
++            .values(captain_id=user_id)
++        )
++    db.session.commit()
++    db.session.expire_all()
++    return joined
+diff --git a/migrations/versions/a1c3e5f7b9d1_add_member_limit_to_teams.py b/migrations/versions/a1c3e5f7b9d1_add_member_limit_to_teams.py
+new file mode 100644
+index 00000000..43e4c27a
+--- /dev/null
++++ b/migrations/versions/a1c3e5f7b9d1_add_member_limit_to_teams.py
+@@ -0,0 +1,24 @@
++"""Add member_limit to teams
++
++Revision ID: a1c3e5f7b9d1
++Revises: 48d8250d19bd
++Create Date: 2026-10-25 12:00:00.000000
++
++"""
++from alembic import op
++import sqlalchemy as sa
++
++
++# revision identifiers, used by Alembic.
++revision = "a1c3e5f7b9d1"
++down_revision = "48d8250d19bd"
++branch_labels = None
++depends_on = None
++
++
++def upgrade():
++    op.add_column("teams", sa.Column("member_limit", sa.Integer(), nullable=True))
++
++
++def downgrade():
++    op.drop_column("teams", "member_limit")
+diff --git a/migrations/versions/b2d4f6a8c0e2_add_penalty_to_challenges.py b/migrations/versions/b2d4f6a8c0e2_add_penalty_to_challenges.py
+new file mode 100644
+index 00000000..1a1f6599
+--- /dev/null
++++ b/migrations/versions/b2d4f6a8c0e2_add_penalty_to_challenges.py
+@@ -0,0 +1,27 @@
++"""Add penalty to challenges
++
++Revision ID: b2d4f6a8c0e2
++Revises: a1c3e5f7b9d1
++Create Date: 2026-10-25 12:30:00.000000
++
++"""
++from alembic import op
++import sqlalchemy as sa
++
++
++# revision identifiers, used by Alembic.
++revision = "b2d4f6a8c0e2"
++down_revision = "a1c3e5f7b9d1"
++branch_labels = None
++depends_on = None
++
++
++def upgrade():
++    op.add_column(
++        "challenges",
++        sa.Column("penalty", sa.Integer(), nullable=False, server_default="0"),
++    )
++
++
++def downgrade():
++    op.drop_column("challenges", "penalty")

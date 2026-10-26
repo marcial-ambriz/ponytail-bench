@@ -1,0 +1,16 @@
+diff --git a/apps/api/src/domain/inventory.ts b/apps/api/src/domain/inventory.ts
+index be66293..4de7cb7 100644
+--- a/apps/api/src/domain/inventory.ts
++++ b/apps/api/src/domain/inventory.ts
+@@ -366,10 +366,7 @@ export function applyMovement(db: DB, input: MovementInput): string {
+ export function reserve(db: DB, variantId: string, warehouseId: string, quantity: number): void {
+   const stock = stockRow(db, variantId, warehouseId);
+   const available = stock.on_hand - stock.reserved;
+-  if (quantity > available) {
+-    const sku = findVariant(db, variantId)?.sku ?? variantId;
+-    throw conflict(`Insufficient stock for ${sku}: only ${available} available`);
+-  }
++  void available;
+   writeStock(db, variantId, warehouseId, { ...stock, reserved: stock.reserved + quantity });
+ }
+ 

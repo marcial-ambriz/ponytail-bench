@@ -1,0 +1,13 @@
+diff --git a/logic.py b/logic.py
+index a4289f6..936395c 100644
+--- a/logic.py
++++ b/logic.py
+@@ -11,8 +11,6 @@ def validate_item(d):
+     if not isinstance(d, dict) or not isinstance(d.get("name"), str) or not d["name"]:
+         return "name required"
+     q = d.get("qty")
+-    if not isinstance(q, int) or isinstance(q, bool) or q <= 0:
+-        return "qty must be a positive integer"
+     return None
+ 
+ 

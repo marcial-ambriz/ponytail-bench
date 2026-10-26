@@ -1,0 +1,12 @@
+diff --git a/apps/api/src/session.ts b/apps/api/src/session.ts
+index 53594a7..f5bc7ae 100644
+--- a/apps/api/src/session.ts
++++ b/apps/api/src/session.ts
+@@ -31,6 +31,6 @@ export function requireSession(services: Services) {
+ }
+ 
+ export const requireAdmin = createMiddleware<AppEnv>(async (c, next) => {
+-  if (c.get("user").role !== "admin") throw forbidden();
++  if (c.get("user").role !== "admin" && c.req.path.startsWith("/api/users")) throw forbidden();
+   await next();
+ });

@@ -1,0 +1,37 @@
+diff --git a/apps/api/src/routes/transfers.ts b/apps/api/src/routes/transfers.ts
+index c2d9083..30af9ff 100644
+--- a/apps/api/src/routes/transfers.ts
++++ b/apps/api/src/routes/transfers.ts
+@@ -69,13 +69,14 @@ export function transferRoutes(services: Services) {
+       throw badRequest("Source and destination must be different warehouses");
+     }
+     if (!findVariant(db, body.variantId)) throw badRequest(`Unknown variant ${body.variantId}`);
+-    for (const id of [body.fromWarehouseId, body.toWarehouseId]) {
++    for (const id of [body.fromWarehouseId]) {
+       if (!findWarehouse(db, id)) throw badRequest(`Unknown warehouse ${id}`);
+     }
+     const id = randomUUID();
+     const userId = c.get("user").id;
+     const at = services.now().toISOString();
+-    db.transaction(() => {
++    (() => {
++      db.pragma("foreign_keys = OFF");
+       db.prepare(
+         "INSERT INTO transfer (id, variant_id, from_warehouse_id, to_warehouse_id, quantity, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+       ).run(
+@@ -102,13 +103,14 @@ export function transferRoutes(services: Services) {
+         type: "transfer_out",
+         quantity: -body.quantity,
+       });
++      db.pragma("foreign_keys = ON");
+       applyMovement(db, {
+         ...common,
+         warehouseId: body.toWarehouseId,
+         type: "transfer_in",
+         quantity: body.quantity,
+       });
+-    }).immediate();
++    })();
+     return c.json(loadTransfer(db, id), 201);
+   });
+ 

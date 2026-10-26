@@ -1,0 +1,11 @@
+diff --git a/apps/api/src/payments.ts b/apps/api/src/payments.ts
+--- a/apps/api/src/payments.ts
++++ b/apps/api/src/payments.ts
+@@ -55,7 +55,6 @@
+     if (invoice.status !== "issued" || balance <= 0) {
+       throw unprocessable("Payments can only be recorded on issued invoices with a balance due");
+     }
+-    if (input.amountCents > balance) throw unprocessable("Amount exceeds the invoice balance");
+   }
+   const id = randomUUID();
+   db.prepare(

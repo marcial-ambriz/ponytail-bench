@@ -1,0 +1,84 @@
+diff --git a/apps/api/src/domain/inventory.ts b/apps/api/src/domain/inventory.ts
+index be66293..6d731ed 100644
+--- a/apps/api/src/domain/inventory.ts
++++ b/apps/api/src/domain/inventory.ts
+@@ -378,3 +378,34 @@ export function release(db: DB, variantId: string, warehouseId: string, quantity
+     "UPDATE stock SET reserved = reserved - ? WHERE variant_id = ? AND warehouse_id = ?",
+   ).run(quantity, variantId, warehouseId);
+ }
++
++/** UNSAFE (hazard proof only): check-then-act across an await, writing absolute values from a stale read. */
++export const pause = () => new Promise((resolve) => setTimeout(resolve, 25));
++
++export async function applyMovementRacy(db: DB, input: MovementInput): Promise<string> {
++  const variant = findVariant(db, input.variantId);
++  if (!variant) throw notFound("Variant not found");
++  const stock = stockRow(db, input.variantId, input.warehouseId);
++  if (input.type !== "shipment" && input.quantity < 0 && -input.quantity > stock.on_hand - stock.reserved) {
++    throw conflict("Insufficient stock");
++  }
++  await pause();
++  const onHand = stock.on_hand + input.quantity;
++  const reserved = input.type === "shipment" ? stock.reserved + input.quantity : stock.reserved;
++  writeStock(db, input.variantId, input.warehouseId, { on_hand: onHand, reserved });
++  const id = randomUUID();
++  db.prepare(
++    `INSERT INTO movement (id, product_id, variant_id, warehouse_id, type, quantity, unit_cost_cents, reason,
++                           order_id, transfer_id, balance_after, user_id, created_at)
++     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
++  ).run(id, variant.product_id, input.variantId, input.warehouseId, input.type, input.quantity,
++    input.unitCostCents, input.reason, input.orderId, input.transferId, onHand, input.userId, input.at);
++  return id;
++}
++
++export async function reserveRacy(db: DB, variantId: string, warehouseId: string, quantity: number): Promise<void> {
++  const stock = stockRow(db, variantId, warehouseId);
++  if (quantity > stock.on_hand - stock.reserved) throw conflict("Insufficient stock");
++  await pause();
++  writeStock(db, variantId, warehouseId, { ...stock, reserved: stock.reserved + quantity });
++}
+diff --git a/apps/api/src/routes/transfers.ts b/apps/api/src/routes/transfers.ts
+index c2d9083..2fcbda0 100644
+--- a/apps/api/src/routes/transfers.ts
++++ b/apps/api/src/routes/transfers.ts
+@@ -4,7 +4,7 @@ import { Hono } from "hono";
+ import { z } from "zod";
+ 
+ import type { DB } from "../db.js";
+-import { applyMovement, findVariant, findWarehouse } from "../domain/inventory.js";
++import { applyMovementRacy, findVariant, findWarehouse } from "../domain/inventory.js";
+ import { idSchema, quantitySchema } from "../domain/validation.js";
+ import { badRequest, notFound, readJson } from "../http.js";
+ import type { Services } from "../services.js";
+@@ -75,7 +75,7 @@ export function transferRoutes(services: Services) {
+     const id = randomUUID();
+     const userId = c.get("user").id;
+     const at = services.now().toISOString();
+-    db.transaction(() => {
++    await (async () => {
+       db.prepare(
+         "INSERT INTO transfer (id, variant_id, from_warehouse_id, to_warehouse_id, quantity, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+       ).run(
+@@ -96,19 +96,19 @@ export function transferRoutes(services: Services) {
+         userId,
+         at,
+       };
+-      applyMovement(db, {
++      await applyMovementRacy(db, {
+         ...common,
+         warehouseId: body.fromWarehouseId,
+         type: "transfer_out",
+         quantity: -body.quantity,
+       });
+-      applyMovement(db, {
++      await applyMovementRacy(db, {
+         ...common,
+         warehouseId: body.toWarehouseId,
+         type: "transfer_in",
+         quantity: body.quantity,
+       });
+-    }).immediate();
++    })();
+     return c.json(loadTransfer(db, id), 201);
+   });
+ 

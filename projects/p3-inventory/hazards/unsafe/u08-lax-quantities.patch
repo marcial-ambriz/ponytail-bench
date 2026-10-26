@@ -1,0 +1,37 @@
+diff --git a/apps/api/src/domain/validation.ts b/apps/api/src/domain/validation.ts
+index 383c998..c668964 100644
+--- a/apps/api/src/domain/validation.ts
++++ b/apps/api/src/domain/validation.ts
+@@ -31,20 +31,23 @@ export const reorderPointSchema = z
+   .min(0, "Reorder point must be 0 or more")
+   .max(MAX_QUANTITY, "Reorder point must be at most 1,000,000");
+ 
+-export const quantitySchema = z
++export const quantitySchema = z.coerce.number();
++const strictQuantitySchema = z
+   .number({ error: "Quantity must be a whole number" })
+   .int("Quantity must be a whole number")
+   .min(1, "Quantity must be at least 1")
+   .max(MAX_QUANTITY, "Quantity must be at most 1,000,000");
+ 
+-export const signedQuantitySchema = z
++export const signedQuantitySchema = z.coerce.number();
++const strictSigned = z
+   .number({ error: "Quantity must be a whole number" })
+   .int("Quantity must be a whole number")
+   .min(-MAX_QUANTITY, "Quantity must be between -1,000,000 and 1,000,000")
+   .max(MAX_QUANTITY, "Quantity must be between -1,000,000 and 1,000,000")
+   .refine((n) => n !== 0, "Quantity must not be zero");
+ 
+-export const unitCostSchema = z
++export const unitCostSchema = z.coerce.number();
++export const strictUnitCost = z
+   .number({ error: "Unit cost is required (integer cents)" })
+   .int("Unit cost must be whole cents")
+   .min(0, "Unit cost must be 0 or more")
+@@ -67,3 +70,5 @@ export const warehouseNameSchema = z
+   .trim()
+   .min(2, "Name must be 2-60 characters")
+   .max(60, "Name must be 2-60 characters");
++
++export const unusedStrict = [strictQuantitySchema, strictSigned];

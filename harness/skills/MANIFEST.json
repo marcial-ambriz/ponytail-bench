@@ -1,0 +1,16 @@
+{
+  "ponytail": {
+    "path": "ponytail/SKILL.md",
+    "sha256": "3d413849a55a3bdd8b01c860b5ae4a2f2b0cacfe1bfc0c97439ecc05e92219d7",
+    "bytes": 6660,
+    "words": 1080,
+    "source": "~/Projects/ponytail-bench-worktrees/.state/<run>/{claude-config,codex-home}/skills/ponytail/SKILL.md (round 1 install of the EngineeringSuite Ponytail plugin v2.0.0; identical in all 4 skill runs)"
+  },
+  "steady": {
+    "path": "steady/SKILL.md",
+    "sha256": "fa9e6002a1b4d11e37272117812c4bd476e33434c952c0d6415c3bdfe86abff9",
+    "bytes": 6335,
+    "words": 1083,
+    "source": "plan/placebo-SKILL.md"
+  }
+}

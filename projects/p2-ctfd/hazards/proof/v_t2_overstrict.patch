@@ -1,0 +1,14 @@
+diff --git a/CTFd/models/__init__.py b/CTFd/models/__init__.py
+index 37b08453..61b8b388 100644
+--- a/CTFd/models/__init__.py
++++ b/CTFd/models/__init__.py
+@@ -939,8 +939,7 @@ class Solves(Submissions):
+     # One solve per challenge per account: per user in user mode, per team in team mode.
+     # Enforced by the database so concurrent requests and admin tools cannot double count.
+     __table_args__ = (
+-        db.UniqueConstraint("challenge_id", "user_id"),
+-        db.UniqueConstraint("challenge_id", "team_id"),
++        db.UniqueConstraint("challenge_id"),
+         {},
+     )
+     id = db.Column(

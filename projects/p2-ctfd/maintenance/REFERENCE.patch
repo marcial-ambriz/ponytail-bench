@@ -1,0 +1,24 @@
+diff --git a/CTFd/plugins/challenges/__init__.py b/CTFd/plugins/challenges/__init__.py
+index cd6dd67e..e0c7bd19 100644
+--- a/CTFd/plugins/challenges/__init__.py
++++ b/CTFd/plugins/challenges/__init__.py
+@@ -70,12 +70,19 @@ def is_first_visible_solve(solve, challenge):
+     Hidden or banned accounts (e.g. staff test teams) never take first blood.
+     """
+     Model = get_model()
++    account = Model.query.filter_by(id=solve.account_id).first()
++    bracket_id = account.bracket_id if account is not None else None
++    # First blood is decided per bracket; accounts without a bracket form their own group
++    same_bracket = (
++        Model.bracket_id.is_(None) if bracket_id is None else Model.bracket_id == bracket_id
++    )
+     first = (
+         Solves.query.join(Model, Solves.account_id == Model.id)
+         .filter(
+             Solves.challenge_id == challenge.id,
+             Model.hidden == false(),
+             Model.banned == false(),
++            same_bracket,
+         )
+         .order_by(Solves.id.asc())
+         .with_entities(Solves.id)

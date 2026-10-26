@@ -1,0 +1,105 @@
+{
+  "id": "p3-inventory",
+  "language": "typescript",
+  "base": {
+    "type": "dir",
+    "path": "base/"
+  },
+  "setup": [
+    "pnpm install --frozen-lockfile || pnpm install"
+  ],
+  "lint": [
+    "pnpm lint"
+  ],
+  "test": [
+    "pnpm test"
+  ],
+  "start": {
+    "cmd": "pnpm dev",
+    "env": [
+      "API_PORT",
+      "WEB_PORT",
+      "DB_PATH"
+    ],
+    "health_url": "http://localhost:${WEB_PORT}/",
+    "timeout_s": 180
+  },
+  "api_url": "http://localhost:${API_PORT}",
+  "base_url": "http://localhost:${WEB_PORT}",
+  "checkpoints": [
+    {
+      "id": "cp1",
+      "title": "Auth, roles and product catalog",
+      "weight": 10,
+      "spec": "spec/cp1.md",
+      "acceptance": "acceptance/run.sh cp1"
+    },
+    {
+      "id": "cp2",
+      "title": "Stock movements and history",
+      "weight": 15,
+      "spec": "spec/cp2.md",
+      "acceptance": "acceptance/run.sh cp2"
+    },
+    {
+      "id": "cp3",
+      "title": "Orders, reservations and low-stock alerts",
+      "weight": 20,
+      "spec": "spec/cp3.md",
+      "acceptance": "acceptance/run.sh cp3",
+      "persist_db": true,
+      "seed_after": "acceptance/run.sh seed-cp3"
+    },
+    {
+      "id": "cp4",
+      "title": "Warehouses, variants and transfers",
+      "weight": 35,
+      "spec": "spec/cp4.md",
+      "acceptance": "acceptance/run.sh cp4",
+      "reuse_db_from": "cp3"
+    },
+    {
+      "id": "cp5",
+      "title": "Reports and CSV export",
+      "weight": 20,
+      "spec": "spec/cp5.md",
+      "acceptance": "acceptance/run.sh cp5"
+    }
+  ],
+  "hazards": {
+    "run": "hazards/run.sh",
+    "categories": [
+      "concurrency",
+      "idempotency",
+      "authz",
+      "validation",
+      "data-loss"
+    ]
+  },
+  "mutations": {
+    "dir": "mutations/",
+    "count": 4
+  },
+  "maintenance": {
+    "task": "maintenance/task.md",
+    "acceptance": "maintenance/run.sh",
+    "regression_hazards": true
+  },
+  "visual": {
+    "screens": "screens.json",
+    "seed": "seed/seed.mjs",
+    "auth": "visual/auth.mjs",
+    "anchors": "visual/anchors"
+  },
+  "ux": {
+    "tasks": "ux-tasks.md",
+    "checkpoints": [
+      "cp3",
+      "cp5"
+    ]
+  },
+  "generated": [
+    "**/routeTree.gen.ts"
+  ],
+  "reference": "reference/"
+}

@@ -1,0 +1,100 @@
+diff --git a/apps/api/src/domain/inventory.ts b/apps/api/src/domain/inventory.ts
+index be66293..6d731ed 100644
+--- a/apps/api/src/domain/inventory.ts
++++ b/apps/api/src/domain/inventory.ts
+@@ -378,3 +378,34 @@ export function release(db: DB, variantId: string, warehouseId: string, quantity
+     "UPDATE stock SET reserved = reserved - ? WHERE variant_id = ? AND warehouse_id = ?",
+   ).run(quantity, variantId, warehouseId);
+ }
++
++/** UNSAFE (hazard proof only): check-then-act across an await, writing absolute values from a stale read. */
++export const pause = () => new Promise((resolve) => setTimeout(resolve, 25));
++
++export async function applyMovementRacy(db: DB, input: MovementInput): Promise<string> {
++  const variant = findVariant(db, input.variantId);
++  if (!variant) throw notFound("Variant not found");
++  const stock = stockRow(db, input.variantId, input.warehouseId);
++  if (input.type !== "shipment" && input.quantity < 0 && -input.quantity > stock.on_hand - stock.reserved) {
++    throw conflict("Insufficient stock");
++  }
++  await pause();
++  const onHand = stock.on_hand + input.quantity;
++  const reserved = input.type === "shipment" ? stock.reserved + input.quantity : stock.reserved;
++  writeStock(db, input.variantId, input.warehouseId, { on_hand: onHand, reserved });
++  const id = randomUUID();
++  db.prepare(
++    `INSERT INTO movement (id, product_id, variant_id, warehouse_id, type, quantity, unit_cost_cents, reason,
++                           order_id, transfer_id, balance_after, user_id, created_at)
++     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
++  ).run(id, variant.product_id, input.variantId, input.warehouseId, input.type, input.quantity,
++    input.unitCostCents, input.reason, input.orderId, input.transferId, onHand, input.userId, input.at);
++  return id;
++}
++
++export async function reserveRacy(db: DB, variantId: string, warehouseId: string, quantity: number): Promise<void> {
++  const stock = stockRow(db, variantId, warehouseId);
++  if (quantity > stock.on_hand - stock.reserved) throw conflict("Insufficient stock");
++  await pause();
++  writeStock(db, variantId, warehouseId, { ...stock, reserved: stock.reserved + quantity });
++}
+diff --git a/apps/api/src/routes/orders.ts b/apps/api/src/routes/orders.ts
+index 76e25dd..8963916 100644
+--- a/apps/api/src/routes/orders.ts
++++ b/apps/api/src/routes/orders.ts
+@@ -10,6 +10,8 @@ import {
+   firstVariant,
+   release,
+   reserve,
++  pause,
++  applyMovementRacy,
+   warehouseFromBody,
+ } from "../domain/inventory.js";
+ import { idSchema, quantitySchema } from "../domain/validation.js";
+@@ -160,17 +162,18 @@ export function orderRoutes(services: Services) {
+     return c.json(loadOrder(db, id), 201);
+   });
+ 
+-  app.post("/:id/ship", (c) => {
++  app.post("/:id/ship", async (c) => {
+     const id = c.req.param("id");
+     const userId = c.get("user").id;
+-    db.transaction(() => {
++    await (async () => {
+       const { status, warehouse_id } = stateOf(id);
+       if (status !== "reserved") {
+         throw conflict(`Only reserved orders can be shipped (this one is ${status})`);
+       }
++      await pause();
+       const at = services.now().toISOString();
+       for (const line of orderLines(db, id)) {
+-        applyMovement(db, {
++        await applyMovementRacy(db, {
+           variantId: line.variant_id,
+           warehouseId: warehouse_id,
+           type: "shipment",
+@@ -184,20 +187,21 @@ export function orderRoutes(services: Services) {
+         });
+       }
+       setStatus(id, "shipped");
+-    }).immediate();
++    })();
+     return c.json(loadOrder(db, id));
+   });
+ 
+-  app.post("/:id/cancel", (c) => {
++  app.post("/:id/cancel", async (c) => {
+     const id = c.req.param("id");
+-    db.transaction(() => {
++    await (async () => {
+       const { status, warehouse_id } = stateOf(id);
+       if (status === "cancelled") return;
++      await pause();
+       if (status !== "reserved") throw conflict("Shipped orders cannot be cancelled");
+       for (const line of orderLines(db, id))
+         release(db, line.variant_id, warehouse_id, line.quantity);
+       setStatus(id, "cancelled");
+-    }).immediate();
++    })();
+     return c.json(loadOrder(db, id));
+   });
+ 

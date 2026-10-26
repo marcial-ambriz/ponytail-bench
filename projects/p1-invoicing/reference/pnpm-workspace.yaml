@@ -1,0 +1,9 @@
+packages:
+  - apps/*
+
+# Minutes a published version must age before pnpm installs it: a day for compromised releases to be pulled.
+minimumReleaseAge: 1440
+
+# oxfmt 0.61 pins tinypool 2.1.0 (GHSA-5gmw-xhrv-c9v3, GHSA-85c8-ppgw-ccpr).
+overrides:
+  tinypool@2.1.0: 2.2.0

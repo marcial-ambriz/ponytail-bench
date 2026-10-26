@@ -1,0 +1,55 @@
+diff --git a/CTFd/utils/teams/__init__.py b/CTFd/utils/teams/__init__.py
+index 0d962b6c..bc2a7684 100644
+--- a/CTFd/utils/teams/__init__.py
++++ b/CTFd/utils/teams/__init__.py
+@@ -22,38 +22,17 @@ def join_team(user_id, team_id):
+     Returns True when the user joined, False when the team is full or the user already
+     belongs to a team.
+     """
+-    row = (
+-        db.session.query(Teams.id, Teams.member_limit, Teams.captain_id)
+-        .filter(Teams.id == team_id)
+-        .with_for_update()
+-        .first()
+-    )
+-    if row is None:
+-        db.session.rollback()
++    # UNSAFE: the original check-then-act, now honouring the per-team limit
++    team = Teams.query.filter_by(id=team_id).first()
++    limit = get_member_limit(team.member_limit)
++    if limit and len(team.members) >= limit:
+         return False
+-    limit = get_member_limit(row.member_limit)
+-
+-    users = Users.__table__
+-    conditions = [users.c.id == user_id, users.c.team_id.is_(None)]
+-    if limit:
+-        seat_users = users.alias("seat_users")
+-        seats_taken = (
+-            select(func.count(seat_users.c.id))
+-            .where(seat_users.c.team_id == team_id)
+-            .scalar_subquery()
+-        )
+-        conditions.append(seats_taken < limit)
+-
+-    result = db.session.execute(
+-        users.update().where(and_(*conditions)).values(team_id=team_id)
+-    )
+-    joined = result.rowcount == 1
+-    if joined and row.captain_id is None:
+-        db.session.execute(
+-            Teams.__table__.update()
+-            .where(Teams.__table__.c.id == team_id)
+-            .values(captain_id=user_id)
+-        )
++    user = Users.query.filter_by(id=user_id).first()
++    if user.team_id is not None:
++        return False
++    user.team_id = team_id
+     db.session.commit()
+-    db.session.expire_all()
+-    return joined
++    if len(team.members) == 1:
++        team.captain_id = user_id
++        db.session.commit()
++    return True

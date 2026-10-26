@@ -1,0 +1,10 @@
+{
+  "captured_at": null,
+  "source": "fill from the providers' official price pages at freeze time (USD per 1M tokens); copy to prices.json",
+  "models": {
+    "claude-sonnet-5-5": {"input": null, "output": null, "cache_read": null, "cache_write": null},
+    "claude-opus-5-5": {"input": null, "output": null, "cache_read": null, "cache_write": null},
+    "gpt-6-luna": {"input": null, "output": null, "cache_read": null, "cache_write": 0},
+    "gpt-6-sol": {"input": null, "output": null, "cache_read": null, "cache_write": 0}
+  }
+}

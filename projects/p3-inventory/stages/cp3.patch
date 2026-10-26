@@ -1,0 +1,3029 @@
+diff --git stg/apps/api/src/app.test.ts stg2/apps/api/src/app.test.ts
+index 73938f3..adbaa0d 100644
+--- stg/apps/api/src/app.test.ts
++++ stg2/apps/api/src/app.test.ts
+@@ -25,19 +25,13 @@ describe("auth and catalog", () => {
+     const { t, clerk, product } = await setup();
+     expect((await body(await t.request("/api/me", { cookie: clerk }))).role).toBe("clerk");
+     expect(product.sku).toBe("AB-1");
+-    const res = await t.request("/api/products", {
+-      cookie: clerk,
+-      body: { sku: "X-11", name: "No" },
+-    });
++    const res = await t.request("/api/products", { cookie: clerk, body: { sku: "X-11", name: "No" } });
+     expect(res.status).toBe(403);
+   });
+ 
+   it("rejects duplicate SKUs case-insensitively and SKU changes", async () => {
+     const { t, admin, product } = await setup();
+-    const dup = await t.request("/api/products", {
+-      cookie: admin,
+-      body: { sku: "AB-1", name: "Again" },
+-    });
++    const dup = await t.request("/api/products", { cookie: admin, body: { sku: "AB-1", name: "Again" } });
+     expect(dup.status).toBe(409);
+     const patch = await t.request(`/api/products/${product.id}`, {
+       cookie: admin,
+@@ -55,9 +49,7 @@ describe("movements", () => {
+     expect((await move({ type: "issue", quantity: 6 })).status).toBe(409);
+     const issue = await body(await move({ type: "issue", quantity: 2 }));
+     expect(issue).toMatchObject({ quantity: -2, balanceAfter: 3, unitCostCents: null });
+-    const history = await body(
+-      await t.request(`/api/products/${product.id}/movements`, { cookie: admin }),
+-    );
++    const history = await body(await t.request(`/api/products/${product.id}/movements`, { cookie: admin }));
+     expect(history.map((m: { quantity: number }) => m.quantity)).toEqual([-2, 5]);
+   });
+ 
+@@ -72,17 +64,13 @@ describe("movements", () => {
+       { type: "adjustment", quantity: 2 },
+       { type: "transfer", quantity: 2 },
+     ];
+-    const statuses = await Promise.all(
+-      bad.map(async (b) => ({ b, status: (await move(b)).status })),
+-    );
++    const statuses = await Promise.all(bad.map(async (b) => ({ b, status: (await move(b)).status })));
+     expect(statuses).toEqual(bad.map((b) => ({ b, status: 422 })));
+   });
+ 
+   it("adjustments are admin only", async () => {
+     const { move, clerk } = await setup();
+-    expect((await move({ type: "adjustment", quantity: 3, reason: "found" }, clerk)).status).toBe(
+-      403,
+-    );
++    expect((await move({ type: "adjustment", quantity: 3, reason: "found" }, clerk)).status).toBe(403);
+     expect((await move({ type: "adjustment", quantity: 3, reason: "found" })).status).toBe(201);
+   });
+ });
+diff --git stg/apps/api/src/app.ts stg2/apps/api/src/app.ts
+index 9eae6c9..6a2f624 100644
+--- stg/apps/api/src/app.ts
++++ stg2/apps/api/src/app.ts
+@@ -5,11 +5,7 @@ import { alertRoutes } from "./routes/alerts.js";
+ import { meRoutes } from "./routes/me.js";
+ import { orderRoutes } from "./routes/orders.js";
+ import { productRoutes } from "./routes/products.js";
+-import { reportRoutes } from "./routes/reports.js";
+-import { transferRoutes } from "./routes/transfers.js";
+ import { userRoutes } from "./routes/users.js";
+-import { variantRoutes } from "./routes/variants.js";
+-import { warehouseRoutes } from "./routes/warehouses.js";
+ import type { Services } from "./services.js";
+ import { requireSession, type AppEnv } from "./session.js";
+ 
+@@ -32,10 +28,6 @@ export function createApp(services: Services) {
+   api.route("/products", productRoutes(services));
+   api.route("/orders", orderRoutes(services));
+   api.route("/alerts", alertRoutes(services));
+-  api.route("/variants", variantRoutes(services));
+-  api.route("/warehouses", warehouseRoutes(services));
+-  api.route("/transfers", transferRoutes(services));
+-  api.route("/reports", reportRoutes(services));
+   app.route("/api", api);
+ 
+   app.notFound((c) => c.json({ error: "Not found" }, 404));
+diff --git stg/apps/api/src/db.ts stg2/apps/api/src/db.ts
+index 1f3b960..7d4f821 100644
+--- stg/apps/api/src/db.ts
++++ stg2/apps/api/src/db.ts
+@@ -1,4 +1,3 @@
+-import { randomUUID } from "node:crypto";
+ import { mkdirSync } from "node:fs";
+ import { dirname, resolve } from "node:path";
+ 
+@@ -17,7 +16,7 @@ export function openDatabase(path: string): DB {
+   return db;
+ }
+ 
+-export const SCHEMA_V3 = `
++const SCHEMA_V3 = `
+   CREATE TABLE product (
+     id TEXT PRIMARY KEY,
+     sku TEXT NOT NULL UNIQUE COLLATE NOCASE,
+@@ -62,170 +61,16 @@ export const SCHEMA_V3 = `
+   );
+ `;
+ 
+-/**
+- * v3 -> v4 (checkpoint 4): warehouses and variants. Stock moves from `product` to `stock` (per variant and
+- * warehouse). Every existing product gets a "Default" variant with its SKU and reorder point; all existing stock,
+- * reservations, movements and orders move to that variant in the MAIN warehouse. Ids, timestamps, users,
+- * balances and history order (`movement.seq`) are copied unchanged.
+- */
+-function migrateV4(db: DB): void {
+-  const now = new Date().toISOString();
+-  db.exec(`
+-    CREATE TABLE warehouse (
+-      id TEXT PRIMARY KEY,
+-      code TEXT NOT NULL UNIQUE,
+-      name TEXT NOT NULL,
+-      created_at TEXT NOT NULL
+-    );
+-
+-    CREATE TABLE variant (
+-      id TEXT PRIMARY KEY,
+-      product_id TEXT NOT NULL REFERENCES product(id),
+-      sku TEXT NOT NULL UNIQUE COLLATE NOCASE,
+-      name TEXT NOT NULL,
+-      reorder_point INTEGER NOT NULL DEFAULT 0 CHECK (reorder_point >= 0),
+-      position INTEGER NOT NULL,
+-      created_at TEXT NOT NULL,
+-      UNIQUE (product_id, position)
+-    );
+-
+-    CREATE TABLE stock (
+-      variant_id TEXT NOT NULL REFERENCES variant(id),
+-      warehouse_id TEXT NOT NULL REFERENCES warehouse(id),
+-      on_hand INTEGER NOT NULL DEFAULT 0 CHECK (on_hand >= 0),
+-      reserved INTEGER NOT NULL DEFAULT 0 CHECK (reserved >= 0 AND reserved <= on_hand),
+-      PRIMARY KEY (variant_id, warehouse_id)
+-    );
+-
+-    CREATE TABLE transfer (
+-      id TEXT PRIMARY KEY,
+-      variant_id TEXT NOT NULL REFERENCES variant(id),
+-      from_warehouse_id TEXT NOT NULL REFERENCES warehouse(id),
+-      to_warehouse_id TEXT NOT NULL REFERENCES warehouse(id),
+-      quantity INTEGER NOT NULL CHECK (quantity > 0),
+-      created_by TEXT NOT NULL REFERENCES user(id),
+-      created_at TEXT NOT NULL
+-    );
+-  `);
+-
+-  const main = randomUUID();
+-  db.prepare(
+-    "INSERT INTO warehouse (id, code, name, created_at) VALUES (?, 'MAIN', 'Main warehouse', ?)",
+-  ).run(main, now);
+-  const products = db
+-    .prepare<
+-      [],
+-      {
+-        id: string;
+-        sku: string;
+-        reorder_point: number;
+-        on_hand: number;
+-        reserved: number;
+-        created_at: string;
+-      }
+-    >("SELECT id, sku, reorder_point, on_hand, reserved, created_at FROM product")
+-    .all();
+-  const insertVariant = db.prepare(
+-    "INSERT INTO variant (id, product_id, sku, name, reorder_point, position, created_at) VALUES (?, ?, ?, 'Default', ?, 0, ?)",
+-  );
+-  const insertStock = db.prepare(
+-    "INSERT INTO stock (variant_id, warehouse_id, on_hand, reserved) VALUES (?, ?, ?, ?)",
+-  );
+-  for (const p of products) {
+-    const variantId = randomUUID();
+-    insertVariant.run(variantId, p.id, p.sku, p.reorder_point, p.created_at);
+-    insertStock.run(variantId, main, p.on_hand, p.reserved);
+-  }
+-
+-  db.exec(`
+-    CREATE TABLE movement_v4 (
+-      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+-      id TEXT NOT NULL UNIQUE,
+-      product_id TEXT NOT NULL REFERENCES product(id),
+-      variant_id TEXT NOT NULL REFERENCES variant(id),
+-      warehouse_id TEXT NOT NULL REFERENCES warehouse(id),
+-      type TEXT NOT NULL CHECK (type IN ('receipt', 'issue', 'adjustment', 'shipment', 'transfer_in', 'transfer_out')),
+-      quantity INTEGER NOT NULL CHECK (quantity <> 0),
+-      unit_cost_cents INTEGER,
+-      reason TEXT,
+-      order_id TEXT,
+-      transfer_id TEXT,
+-      balance_after INTEGER NOT NULL CHECK (balance_after >= 0),
+-      user_id TEXT NOT NULL REFERENCES user(id),
+-      created_at TEXT NOT NULL
+-    );
+-    INSERT INTO movement_v4 (seq, id, product_id, variant_id, warehouse_id, type, quantity, unit_cost_cents, reason,
+-                             order_id, transfer_id, balance_after, user_id, created_at)
+-      SELECT m.seq, m.id, m.product_id, v.id, '${main}', m.type, m.quantity, m.unit_cost_cents, m.reason,
+-             m.order_id, NULL, m.balance_after, m.user_id, m.created_at
+-      FROM movement m JOIN variant v ON v.product_id = m.product_id AND v.position = 0;
+-    DROP TABLE movement;
+-    ALTER TABLE movement_v4 RENAME TO movement;
+-    CREATE INDEX movement_product ON movement (product_id, seq);
+-    CREATE INDEX movement_variant ON movement (variant_id, warehouse_id, seq);
+-    CREATE INDEX movement_created ON movement (created_at);
+-
+-    CREATE TABLE sales_order_v4 (
+-      id TEXT PRIMARY KEY,
+-      customer TEXT NOT NULL,
+-      status TEXT NOT NULL CHECK (status IN ('reserved', 'shipped', 'cancelled')),
+-      warehouse_id TEXT NOT NULL REFERENCES warehouse(id),
+-      created_by TEXT NOT NULL REFERENCES user(id),
+-      created_at TEXT NOT NULL,
+-      updated_at TEXT NOT NULL
+-    );
+-    INSERT INTO sales_order_v4 (rowid, id, customer, status, warehouse_id, created_by, created_at, updated_at)
+-      SELECT rowid, id, customer, status, '${main}', created_by, created_at, updated_at FROM sales_order;
+-    DROP TABLE sales_order;
+-    ALTER TABLE sales_order_v4 RENAME TO sales_order;
+-
+-    CREATE TABLE order_line_v4 (
+-      order_id TEXT NOT NULL REFERENCES sales_order(id),
+-      line_no INTEGER NOT NULL,
+-      product_id TEXT NOT NULL REFERENCES product(id),
+-      variant_id TEXT NOT NULL REFERENCES variant(id),
+-      quantity INTEGER NOT NULL CHECK (quantity > 0),
+-      PRIMARY KEY (order_id, line_no)
+-    );
+-    INSERT INTO order_line_v4 (order_id, line_no, product_id, variant_id, quantity)
+-      SELECT l.order_id, l.line_no, l.product_id, v.id, l.quantity
+-      FROM order_line l JOIN variant v ON v.product_id = l.product_id AND v.position = 0;
+-    DROP TABLE order_line;
+-    ALTER TABLE order_line_v4 RENAME TO order_line;
+-
+-    CREATE TABLE product_v4 (
+-      id TEXT PRIMARY KEY,
+-      name TEXT NOT NULL,
+-      description TEXT,
+-      created_at TEXT NOT NULL
+-    );
+-    INSERT INTO product_v4 (rowid, id, name, description, created_at)
+-      SELECT rowid, id, name, description, created_at FROM product;
+-    DROP TABLE product;
+-    ALTER TABLE product_v4 RENAME TO product;
+-  `);
+-}
+-
+ /**
+  * Creates or upgrades the application tables (better-auth owns `user`, `session`, `account`, `verification`).
+- * `PRAGMA user_version` records the schema version; each step runs once, inside one transaction, with foreign keys
+- * checked at the end (table rebuilds need them off while tables are swapped).
++ * `PRAGMA user_version` records the schema version; each step runs once, inside a transaction.
+  */
+ export function migrateAppSchema(db: DB): void {
+   const version = Number(db.pragma("user_version", { simple: true }));
+-  if (version >= 4) return;
+-  db.pragma("foreign_keys = OFF");
+-  try {
++  if (version < 3) {
+     db.transaction(() => {
+-      if (version < 3) db.exec(SCHEMA_V3);
+-      migrateV4(db);
+-      const broken = db.pragma("foreign_key_check");
+-      if (Array.isArray(broken) && broken.length > 0) {
+-        throw new Error(`migration left ${broken.length} broken references`);
+-      }
+-      db.pragma("user_version = 4");
+-    }).immediate();
+-  } finally {
+-    db.pragma("foreign_keys = ON");
++      db.exec(SCHEMA_V3);
++      db.pragma("user_version = 3");
++    })();
+   }
+ }
+diff --git stg/apps/api/src/domain/inventory.ts stg2/apps/api/src/domain/inventory.ts
+index be66293..f6c3830 100644
+--- stg/apps/api/src/domain/inventory.ts
++++ stg2/apps/api/src/domain/inventory.ts
+@@ -1,247 +1,61 @@
+ import { randomUUID } from "node:crypto";
+ 
+ import type { DB } from "../db.js";
+-import { badRequest, conflict, notFound } from "../http.js";
++import { conflict, notFound } from "../http.js";
+ 
+-export type MovementType =
+-  | "receipt"
+-  | "issue"
+-  | "adjustment"
+-  | "shipment"
+-  | "transfer_in"
+-  | "transfer_out";
++export type MovementType = "receipt" | "issue" | "adjustment" | "shipment";
+ 
+-// ---------------------------------------------------------------- warehouses
+-
+-export interface WarehouseRow {
++export interface ProductRow {
+   id: string;
+-  code: string;
++  sku: string;
+   name: string;
++  description: string | null;
++  reorder_point: number;
++  on_hand: number;
++  reserved: number;
++  created_at: string;
+ }
+ 
+-export function findWarehouse(db: DB, id: string): WarehouseRow | undefined {
+-  return db
+-    .prepare<[string], WarehouseRow>("SELECT id, code, name FROM warehouse WHERE id = ?")
+-    .get(id);
+-}
+-
+-export function mainWarehouse(db: DB): WarehouseRow {
+-  const row = db
+-    .prepare<[], WarehouseRow>("SELECT id, code, name FROM warehouse WHERE code = 'MAIN'")
+-    .get();
+-  if (!row) throw new Error("MAIN warehouse is missing");
+-  return row;
+-}
+-
+-/** The warehouse named in a request body (422 when unknown), or MAIN when absent. */
+-export function warehouseFromBody(db: DB, id: string | undefined): WarehouseRow {
+-  if (id === undefined) return mainWarehouse(db);
+-  const row = findWarehouse(db, id);
+-  if (!row) throw badRequest(`Unknown warehouse ${id}`);
+-  return row;
+-}
+-
+-// ---------------------------------------------------------------- variants
+-
+-export interface VariantRow {
++export interface Product {
+   id: string;
+-  product_id: string;
+   sku: string;
+   name: string;
+-  reorder_point: number;
+-  position: number;
+-}
+-
+-const VARIANT_COLUMNS = "id, product_id, sku, name, reorder_point, position";
+-
+-export function findVariant(db: DB, id: string): VariantRow | undefined {
+-  return db
+-    .prepare<[string], VariantRow>(`SELECT ${VARIANT_COLUMNS} FROM variant WHERE id = ?`)
+-    .get(id);
+-}
+-
+-export function firstVariant(db: DB, productId: string): VariantRow {
+-  const row = db
+-    .prepare<[string], VariantRow>(
+-      `SELECT ${VARIANT_COLUMNS} FROM variant WHERE product_id = ? ORDER BY position LIMIT 1`,
+-    )
+-    .get(productId);
+-  if (!row) throw notFound("Product not found");
+-  return row;
+-}
+-
+-export function skuTaken(db: DB, sku: string): boolean {
+-  return Boolean(db.prepare("SELECT 1 FROM variant WHERE sku = ?").get(sku));
+-}
+-
+-export function insertVariant(
+-  db: DB,
+-  input: { productId: string; sku: string; name: string; reorderPoint: number; at: string },
+-): string {
+-  const id = randomUUID();
+-  const next = db
+-    .prepare<[string], { n: number }>(
+-      "SELECT COALESCE(MAX(position) + 1, 0) AS n FROM variant WHERE product_id = ?",
+-    )
+-    .get(input.productId);
+-  db.prepare(
+-    "INSERT INTO variant (id, product_id, sku, name, reorder_point, position, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+-  ).run(id, input.productId, input.sku, input.name, input.reorderPoint, next?.n ?? 0, input.at);
+-  return id;
+-}
+-
+-interface VariantTotalsRow extends VariantRow {
+-  on_hand: number;
++  description: string | null;
++  reorderPoint: number;
++  onHand: number;
+   reserved: number;
++  available: number;
++  createdAt: string;
+ }
+ 
+-function toVariant(row: VariantTotalsRow) {
++export function toProduct(row: ProductRow): Product {
+   return {
+     id: row.id,
+-    productId: row.product_id,
+     sku: row.sku,
+     name: row.name,
++    description: row.description,
+     reorderPoint: row.reorder_point,
+     onHand: row.on_hand,
+     reserved: row.reserved,
+     available: row.on_hand - row.reserved,
++    createdAt: row.created_at,
+   };
+ }
+ 
+-const VARIANT_TOTALS = `
+-  SELECT v.id, v.product_id, v.sku, v.name, v.reorder_point, v.position,
+-         COALESCE(SUM(s.on_hand), 0) AS on_hand, COALESCE(SUM(s.reserved), 0) AS reserved
+-  FROM variant v LEFT JOIN stock s ON s.variant_id = v.id`;
+-
+-export function variantView(db: DB, id: string) {
+-  const row = db
+-    .prepare<[string], VariantTotalsRow>(`${VARIANT_TOTALS} WHERE v.id = ? GROUP BY v.id`)
+-    .get(id);
+-  if (!row) throw notFound("Variant not found");
+-  return toVariant(row);
+-}
+-
+-// ---------------------------------------------------------------- products
+-
+-interface ProductRow {
+-  id: string;
+-  name: string;
+-  description: string | null;
+-  created_at: string;
+-}
+-
+-export function loadProductRow(db: DB, id: string): ProductRow {
+-  const row = db
+-    .prepare<[string], ProductRow>(
+-      "SELECT id, name, description, created_at FROM product WHERE id = ?",
+-    )
+-    .get(id);
++export function loadProduct(db: DB, id: string): ProductRow {
++  const row = db.prepare<[string], ProductRow>("SELECT * FROM product WHERE id = ?").get(id);
+   if (!row) throw notFound("Product not found");
+   return row;
+ }
+ 
+-export function productView(db: DB, id: string) {
+-  const product = loadProductRow(db, id);
+-  const variants = db
+-    .prepare<[string], VariantTotalsRow>(
+-      `${VARIANT_TOTALS} WHERE v.product_id = ? GROUP BY v.id ORDER BY v.position`,
+-    )
+-    .all(id)
+-    .map(toVariant);
+-  const stock = db
+-    .prepare<
+-      [string],
+-      {
+-        warehouse_id: string;
+-        code: string;
+-        variant_id: string;
+-        sku: string;
+-        on_hand: number;
+-        reserved: number;
+-      }
+-    >(
+-      `SELECT s.warehouse_id, w.code, s.variant_id, v.sku, s.on_hand, s.reserved
+-       FROM stock s JOIN variant v ON v.id = s.variant_id JOIN warehouse w ON w.id = s.warehouse_id
+-       WHERE v.product_id = ? AND (s.on_hand <> 0 OR s.reserved <> 0)
+-       ORDER BY v.position, w.code`,
+-    )
+-    .all(id)
+-    .map((s) => ({
+-      warehouseId: s.warehouse_id,
+-      warehouseCode: s.code,
+-      variantId: s.variant_id,
+-      sku: s.sku,
+-      onHand: s.on_hand,
+-      reserved: s.reserved,
+-      available: s.on_hand - s.reserved,
+-    }));
+-  const first = variants[0];
+-  const onHand = variants.reduce((n, v) => n + v.onHand, 0);
+-  const reserved = variants.reduce((n, v) => n + v.reserved, 0);
+-  return {
+-    id: product.id,
+-    sku: first?.sku ?? "",
+-    name: product.name,
+-    description: product.description,
+-    reorderPoint: first?.reorderPoint ?? 0,
+-    onHand,
+-    reserved,
+-    available: onHand - reserved,
+-    createdAt: product.created_at,
+-    variants: variants.map((v) => ({
+-      id: v.id,
+-      sku: v.sku,
+-      name: v.name,
+-      reorderPoint: v.reorderPoint,
+-      onHand: v.onHand,
+-      reserved: v.reserved,
+-      available: v.available,
+-    })),
+-    stock,
+-  };
+-}
+-
+-export type ProductView = ReturnType<typeof productView>;
+-
+-// ---------------------------------------------------------------- stock
+-
+-interface StockRow {
+-  on_hand: number;
+-  reserved: number;
+-}
+-
+-function stockRow(db: DB, variantId: string, warehouseId: string): StockRow {
+-  return (
+-    db
+-      .prepare<[string, string], StockRow>(
+-        "SELECT on_hand, reserved FROM stock WHERE variant_id = ? AND warehouse_id = ?",
+-      )
+-      .get(variantId, warehouseId) ?? { on_hand: 0, reserved: 0 }
+-  );
+-}
+-
+-function writeStock(db: DB, variantId: string, warehouseId: string, row: StockRow): void {
+-  db.prepare(
+-    `INSERT INTO stock (variant_id, warehouse_id, on_hand, reserved) VALUES (?, ?, ?, ?)
+-     ON CONFLICT (variant_id, warehouse_id) DO UPDATE SET on_hand = excluded.on_hand, reserved = excluded.reserved`,
+-  ).run(variantId, warehouseId, row.on_hand, row.reserved);
+-}
+-
+-// ---------------------------------------------------------------- movements
+-
+ interface MovementRow {
+   id: string;
+   product_id: string;
+-  variant_id: string;
+-  sku: string;
+-  warehouse_id: string;
+-  warehouse_code: string;
+   type: MovementType;
+   quantity: number;
+   unit_cost_cents: number | null;
+   reason: string | null;
+   order_id: string | null;
+-  transfer_id: string | null;
+   balance_after: number;
+   user_id: string;
+   user_name: string;
+@@ -249,28 +63,19 @@ interface MovementRow {
+ }
+ 
+ export const MOVEMENT_SELECT = `
+-  SELECT m.id, m.product_id, m.variant_id, v.sku, m.warehouse_id, w.code AS warehouse_code, m.type, m.quantity,
+-         m.unit_cost_cents, m.reason, m.order_id, m.transfer_id, m.balance_after, m.user_id, u.name AS user_name,
+-         m.created_at
+-  FROM movement m
+-  JOIN user u ON u.id = m.user_id
+-  JOIN variant v ON v.id = m.variant_id
+-  JOIN warehouse w ON w.id = m.warehouse_id`;
++  SELECT m.id, m.product_id, m.type, m.quantity, m.unit_cost_cents, m.reason, m.order_id,
++         m.balance_after, m.user_id, u.name AS user_name, m.created_at
++  FROM movement m JOIN user u ON u.id = m.user_id`;
+ 
+ export function toMovement(row: MovementRow) {
+   return {
+     id: row.id,
+     productId: row.product_id,
+-    variantId: row.variant_id,
+-    sku: row.sku,
+-    warehouseId: row.warehouse_id,
+-    warehouseCode: row.warehouse_code,
+     type: row.type,
+     quantity: row.quantity,
+     unitCostCents: row.unit_cost_cents,
+     reason: row.reason,
+     orderId: row.order_id,
+-    transferId: row.transfer_id,
+     balanceAfter: row.balance_after,
+     userId: row.user_id,
+     userName: row.user_name,
+@@ -284,77 +89,59 @@ export function loadMovement(db: DB, id: string) {
+   return toMovement(row);
+ }
+ 
+-export function listMovements(
+-  db: DB,
+-  productId: string,
+-  filters: { variantId?: string; warehouseId?: string } = {},
+-) {
+-  const where = ["m.product_id = ?"];
+-  const params = [productId];
+-  if (filters.variantId) {
+-    where.push("m.variant_id = ?");
+-    params.push(filters.variantId);
+-  }
+-  if (filters.warehouseId) {
+-    where.push("m.warehouse_id = ?");
+-    params.push(filters.warehouseId);
+-  }
++export function listMovements(db: DB, productId: string) {
+   return db
+-    .prepare<string[], MovementRow>(
+-      `${MOVEMENT_SELECT} WHERE ${where.join(" AND ")} ORDER BY m.seq DESC`,
+-    )
+-    .all(...params)
++    .prepare<[string], MovementRow>(`${MOVEMENT_SELECT} WHERE m.product_id = ? ORDER BY m.seq DESC`)
++    .all(productId)
+     .map(toMovement);
+ }
+ 
+ export interface MovementInput {
+-  variantId: string;
+-  warehouseId: string;
++  productId: string;
+   type: MovementType;
+   /** Signed: positive adds stock, negative removes it. */
+   quantity: number;
+   unitCostCents: number | null;
+   reason: string | null;
+   orderId: string | null;
+-  transferId: string | null;
+   userId: string;
+   at: string;
+ }
+ 
+ /**
+- * Records one movement and updates the stock row it affects. Must run inside a transaction.
+- * Only available stock can leave, except for shipments, which consume their own reservation.
++ * Records one movement and updates the stock it affects. Must run inside a transaction.
++ * Only `available` stock can leave, except for shipments, which consume their own reservation.
+  */
+ export function applyMovement(db: DB, input: MovementInput): string {
+-  const variant = findVariant(db, input.variantId);
+-  if (!variant) throw notFound("Variant not found");
+-  const stock = stockRow(db, input.variantId, input.warehouseId);
+-  const available = stock.on_hand - stock.reserved;
+-  let reserved = stock.reserved;
++  const product = loadProduct(db, input.productId);
++  let reserved = product.reserved;
+   if (input.type === "shipment") {
+-    reserved += input.quantity;
+-  } else if (input.quantity < 0 && -input.quantity > available) {
+-    throw conflict(`Insufficient stock: only ${available} of ${variant.sku} available`);
++    reserved -= -input.quantity;
++  } else if (input.quantity < 0 && -input.quantity > product.on_hand - product.reserved) {
++    throw conflict(`Insufficient stock: only ${product.on_hand - product.reserved} available`);
++  }
++  const onHand = product.on_hand + input.quantity;
++  if (onHand < 0 || reserved < 0 || reserved > onHand) {
++    throw conflict("Insufficient stock");
+   }
+-  const onHand = stock.on_hand + input.quantity;
+-  if (onHand < 0 || reserved < 0 || reserved > onHand) throw conflict("Insufficient stock");
+-  writeStock(db, input.variantId, input.warehouseId, { on_hand: onHand, reserved });
++  db.prepare("UPDATE product SET on_hand = ?, reserved = ? WHERE id = ?").run(
++    onHand,
++    reserved,
++    product.id,
++  );
+   const id = randomUUID();
+   db.prepare(
+-    `INSERT INTO movement (id, product_id, variant_id, warehouse_id, type, quantity, unit_cost_cents, reason,
+-                           order_id, transfer_id, balance_after, user_id, created_at)
+-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
++    `INSERT INTO movement (id, product_id, type, quantity, unit_cost_cents, reason, order_id,
++                           balance_after, user_id, created_at)
++     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+   ).run(
+     id,
+-    variant.product_id,
+-    input.variantId,
+-    input.warehouseId,
++    product.id,
+     input.type,
+     input.quantity,
+     input.unitCostCents,
+     input.reason,
+     input.orderId,
+-    input.transferId,
+     onHand,
+     input.userId,
+     input.at,
+@@ -362,19 +149,16 @@ export function applyMovement(db: DB, input: MovementInput): string {
+   return id;
+ }
+ 
+-/** Holds units of a variant in a warehouse for an order. Must run inside a transaction. */
+-export function reserve(db: DB, variantId: string, warehouseId: string, quantity: number): void {
+-  const stock = stockRow(db, variantId, warehouseId);
+-  const available = stock.on_hand - stock.reserved;
++/** Holds `quantity` units of a product for an order. Must run inside a transaction. */
++export function reserve(db: DB, productId: string, quantity: number): void {
++  const product = loadProduct(db, productId);
++  const available = product.on_hand - product.reserved;
+   if (quantity > available) {
+-    const sku = findVariant(db, variantId)?.sku ?? variantId;
+-    throw conflict(`Insufficient stock for ${sku}: only ${available} available`);
++    throw conflict(`Insufficient stock for ${product.sku}: only ${available} available`);
+   }
+-  writeStock(db, variantId, warehouseId, { ...stock, reserved: stock.reserved + quantity });
++  db.prepare("UPDATE product SET reserved = reserved + ? WHERE id = ?").run(quantity, productId);
+ }
+ 
+-export function release(db: DB, variantId: string, warehouseId: string, quantity: number): void {
+-  db.prepare(
+-    "UPDATE stock SET reserved = reserved - ? WHERE variant_id = ? AND warehouse_id = ?",
+-  ).run(quantity, variantId, warehouseId);
++export function release(db: DB, productId: string, quantity: number): void {
++  db.prepare("UPDATE product SET reserved = reserved - ? WHERE id = ?").run(quantity, productId);
+ }
+diff --git stg/apps/api/src/domain/reports.ts stg/apps/api/src/domain/reports.ts
+deleted file mode 100644
+index e47ee7d..0000000
+--- stg/apps/api/src/domain/reports.ts
++++ /dev/null
+@@ -1,183 +0,0 @@
+-import type { DB } from "../db.js";
+-import type { MovementType } from "./inventory.js";
+-
+-/** round(n / d) half up, for non-negative integers, exact (BigInt). */
+-export function divRound(n: bigint, d: bigint): bigint {
+-  return (2n * n + d) / (2n * d);
+-}
+-
+-interface ReplayRow {
+-  variant_id: string;
+-  warehouse_id: string;
+-  type: MovementType;
+-  quantity: number;
+-  unit_cost_cents: number | null;
+-}
+-
+-export interface VariantValue {
+-  /** Units over all warehouses. */
+-  q: bigint;
+-  /** Value in cents over all warehouses. */
+-  v: bigint;
+-  /** Units per warehouse. */
+-  byWarehouse: Map<string, bigint>;
+-}
+-
+-/** Applies one movement to a variant's moving-average state (spec cp5 R5.1). */
+-export function applyToValue(state: VariantValue, m: ReplayRow): void {
+-  const qty = BigInt(m.quantity);
+-  state.byWarehouse.set(m.warehouse_id, (state.byWarehouse.get(m.warehouse_id) ?? 0n) + qty);
+-  if (m.type === "transfer_in" || m.type === "transfer_out") return;
+-  if (m.type === "receipt") {
+-    state.q += qty;
+-    state.v += qty * BigInt(m.unit_cost_cents ?? 0);
+-  } else if (qty < 0n) {
+-    const out = -qty;
+-    state.v -= state.q > 0n ? divRound(state.v * out, state.q) : 0n;
+-    state.q -= out;
+-  } else {
+-    state.v += state.q > 0n ? divRound(state.v * qty, state.q) : 0n;
+-    state.q += qty;
+-  }
+-}
+-
+-/** Replays every movement in recording order and returns the valuation state per variant. */
+-export function valueVariants(db: DB): Map<string, VariantValue> {
+-  const out = new Map<string, VariantValue>();
+-  const rows = db
+-    .prepare<[], ReplayRow>(
+-      "SELECT variant_id, warehouse_id, type, quantity, unit_cost_cents FROM movement ORDER BY seq",
+-    )
+-    .iterate();
+-  for (const m of rows) {
+-    let state = out.get(m.variant_id);
+-    if (!state) {
+-      state = { q: 0n, v: 0n, byWarehouse: new Map() };
+-      out.set(m.variant_id, state);
+-    }
+-    applyToValue(state, m);
+-  }
+-  return out;
+-}
+-
+-interface VariantInfo {
+-  id: string;
+-  sku: string;
+-  product_name: string;
+-  variant_name: string;
+-}
+-
+-function variantInfo(db: DB): VariantInfo[] {
+-  return db
+-    .prepare<[], VariantInfo>(
+-      `SELECT v.id, v.sku, p.name AS product_name, v.name AS variant_name
+-       FROM variant v JOIN product p ON p.id = v.product_id ORDER BY v.sku`,
+-    )
+-    .all();
+-}
+-
+-export function valuationReport(db: DB, warehouseId?: string) {
+-  const values = valueVariants(db);
+-  const rows = [];
+-  let total = 0n;
+-  for (const info of variantInfo(db)) {
+-    const s = values.get(info.id);
+-    if (!s) continue;
+-    const onHand = warehouseId ? (s.byWarehouse.get(warehouseId) ?? 0n) : s.q;
+-    if (onHand <= 0n) continue;
+-    const value = warehouseId ? (s.q > 0n ? divRound(s.v * onHand, s.q) : 0n) : s.v;
+-    const average = s.q > 0n ? divRound(s.v, s.q) : 0n;
+-    total += value;
+-    rows.push({
+-      variantId: info.id,
+-      sku: info.sku,
+-      productName: info.product_name,
+-      variantName: info.variant_name,
+-      onHand: Number(onHand),
+-      averageCostCents: Number(average),
+-      valueCents: Number(value),
+-    });
+-  }
+-  return { totalValueCents: Number(total), rows };
+-}
+-
+-interface PeriodRow {
+-  variant_id: string;
+-  type: MovementType;
+-  quantity: number;
+-  before: number;
+-}
+-
+-export function movementReport(db: DB, from: string, to: string, warehouseId?: string) {
+-  const start = `${from}T00:00:00.000Z`;
+-  const endExclusive = new Date(Date.parse(`${to}T00:00:00.000Z`) + 86_400_000).toISOString();
+-  const where = warehouseId ? "AND warehouse_id = ?" : "";
+-  const params = warehouseId ? [start, endExclusive, warehouseId] : [start, endExclusive];
+-  const rows = db
+-    .prepare<string[], PeriodRow>(
+-      `SELECT variant_id, type, quantity, CASE WHEN created_at < ? THEN 1 ELSE 0 END AS before
+-       FROM movement WHERE created_at < ? ${where} ORDER BY seq`,
+-    )
+-    .all(...params);
+-  const acc = new Map<
+-    string,
+-    {
+-      opening: number;
+-      received: number;
+-      shipped: number;
+-      adjusted: number;
+-      transferred: number;
+-      any: boolean;
+-    }
+-  >();
+-  for (const r of rows) {
+-    let a = acc.get(r.variant_id);
+-    if (!a) {
+-      a = { opening: 0, received: 0, shipped: 0, adjusted: 0, transferred: 0, any: false };
+-      acc.set(r.variant_id, a);
+-    }
+-    if (r.before) {
+-      a.opening += r.quantity;
+-      continue;
+-    }
+-    a.any = true;
+-    if (r.type === "receipt") a.received += r.quantity;
+-    else if (r.type === "issue" || r.type === "shipment") a.shipped -= r.quantity;
+-    else if (r.type === "transfer_in" || r.type === "transfer_out") a.transferred += r.quantity;
+-    else a.adjusted += r.quantity;
+-  }
+-  const out = [];
+-  for (const info of variantInfo(db)) {
+-    const a = acc.get(info.id);
+-    if (!a || (!a.any && a.opening === 0)) continue;
+-    out.push({
+-      variantId: info.id,
+-      sku: info.sku,
+-      productName: info.product_name,
+-      variantName: info.variant_name,
+-      opening: a.opening,
+-      received: a.received,
+-      shipped: a.shipped,
+-      adjusted: a.adjusted,
+-      transferred: a.transferred,
+-      closing: a.opening + a.received - a.shipped + a.adjusted + a.transferred,
+-    });
+-  }
+-  return { from, to, rows: out };
+-}
+-
+-/** RFC 4180 field. */
+-export function csvField(value: string | number): string {
+-  const s = String(value);
+-  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+-}
+-
+-export function money(cents: number): string {
+-  const sign = cents < 0 ? "-" : "";
+-  const abs = Math.abs(cents);
+-  return `${sign}${Math.floor(abs / 100)}.${String(abs % 100).padStart(2, "0")}`;
+-}
+-
+-export function toCsv(header: string[], rows: Array<Array<string | number>>): string {
+-  return [header, ...rows].map((r) => r.map(csvField).join(",")).join("\r\n") + "\r\n";
+-}
+diff --git stg/apps/api/src/domain/validation.ts stg2/apps/api/src/domain/validation.ts
+index 383c998..90815ed 100644
+--- stg/apps/api/src/domain/validation.ts
++++ stg2/apps/api/src/domain/validation.ts
+@@ -49,21 +49,3 @@ export const unitCostSchema = z
+   .int("Unit cost must be whole cents")
+   .min(0, "Unit cost must be 0 or more")
+   .max(MAX_UNIT_COST_CENTS, "Unit cost is too large");
+-
+-export const variantNameSchema = z
+-  .string({ error: "Variant name is required" })
+-  .trim()
+-  .min(1, "Variant name must be 1-60 characters")
+-  .max(60, "Variant name must be 1-60 characters");
+-
+-export const warehouseCodeSchema = z
+-  .string({ error: "Code is required" })
+-  .trim()
+-  .toUpperCase()
+-  .regex(/^[A-Z0-9]{2,10}$/, "Code must be 2-10 characters using A-Z or 0-9");
+-
+-export const warehouseNameSchema = z
+-  .string({ error: "Name is required" })
+-  .trim()
+-  .min(2, "Name must be 2-60 characters")
+-  .max(60, "Name must be 2-60 characters");
+diff --git stg/apps/api/src/migration.test.ts stg/apps/api/src/migration.test.ts
+deleted file mode 100644
+index 8122b65..0000000
+--- stg/apps/api/src/migration.test.ts
++++ /dev/null
+@@ -1,102 +0,0 @@
+-import { describe, expect, it } from "vitest";
+-
+-import { migrateAppSchema, openDatabase, SCHEMA_V3 } from "./db.js";
+-
+-/** A checkpoint-3 database: the frozen v3 schema plus a little data. */
+-function v3Database() {
+-  const db = openDatabase(":memory:");
+-  db.exec("CREATE TABLE user (id TEXT PRIMARY KEY, name TEXT NOT NULL)");
+-  db.exec(SCHEMA_V3);
+-  db.pragma("user_version = 3");
+-  db.exec(`
+-    INSERT INTO user VALUES ('u1', 'Ann');
+-    INSERT INTO product (id, sku, name, reorder_point, on_hand, reserved, created_at)
+-      VALUES ('p1', 'AB-1', 'Widget', 4, 7, 2, '2030-01-01T00:00:00.000Z'),
+-             ('p2', 'AB-2', 'Gadget', 0, 0, 0, '2030-01-02T00:00:00.000Z');
+-    INSERT INTO movement (id, product_id, type, quantity, unit_cost_cents, reason, order_id, balance_after, user_id, created_at)
+-      VALUES ('m1', 'p1', 'receipt', 10, 250, NULL, NULL, 10, 'u1', '2030-01-03T00:00:00.000Z'),
+-             ('m2', 'p1', 'shipment', -3, NULL, NULL, 'o1', 7, 'u1', '2030-01-04T00:00:00.000Z');
+-    INSERT INTO sales_order VALUES ('o1', 'ACME', 'shipped', 'u1', '2030-01-04T00:00:00.000Z', '2030-01-04T00:00:00.000Z'),
+-                                   ('o2', 'Globex', 'reserved', 'u1', '2030-01-05T00:00:00.000Z', '2030-01-05T00:00:00.000Z');
+-    INSERT INTO order_line VALUES ('o1', 1, 'p1', 3), ('o2', 1, 'p1', 2);
+-  `);
+-  return db;
+-}
+-
+-describe("v3 -> v4 migration", () => {
+-  it("moves stock, movements and orders to a Default variant in MAIN without losing anything", () => {
+-    const db = v3Database();
+-    migrateAppSchema(db);
+-    expect(db.pragma("user_version", { simple: true })).toBe(4);
+-
+-    const main = db
+-      .prepare<[], { id: string; name: string }>(
+-        "SELECT id, name FROM warehouse WHERE code = 'MAIN'",
+-      )
+-      .get();
+-    if (!main) throw new Error("MAIN missing");
+-    expect(main.name).toBe("Main warehouse");
+-    const variants = db
+-      .prepare("SELECT product_id, sku, name, reorder_point FROM variant ORDER BY sku")
+-      .all();
+-    expect(variants).toEqual([
+-      { product_id: "p1", sku: "AB-1", name: "Default", reorder_point: 4 },
+-      { product_id: "p2", sku: "AB-2", name: "Default", reorder_point: 0 },
+-    ]);
+-    const stock = db
+-      .prepare(
+-        "SELECT v.sku, s.warehouse_id, s.on_hand, s.reserved FROM stock s JOIN variant v ON v.id = s.variant_id ORDER BY v.sku",
+-      )
+-      .all();
+-    expect(stock).toEqual([
+-      { sku: "AB-1", warehouse_id: main.id, on_hand: 7, reserved: 2 },
+-      { sku: "AB-2", warehouse_id: main.id, on_hand: 0, reserved: 0 },
+-    ]);
+-    const movements = db
+-      .prepare(
+-        "SELECT seq, id, type, quantity, unit_cost_cents, order_id, balance_after, warehouse_id, created_at FROM movement ORDER BY seq",
+-      )
+-      .all();
+-    expect(movements).toEqual([
+-      {
+-        seq: 1,
+-        id: "m1",
+-        type: "receipt",
+-        quantity: 10,
+-        unit_cost_cents: 250,
+-        order_id: null,
+-        balance_after: 10,
+-        warehouse_id: main.id,
+-        created_at: "2030-01-03T00:00:00.000Z",
+-      },
+-      {
+-        seq: 2,
+-        id: "m2",
+-        type: "shipment",
+-        quantity: -3,
+-        unit_cost_cents: null,
+-        order_id: "o1",
+-        balance_after: 7,
+-        warehouse_id: main.id,
+-        created_at: "2030-01-04T00:00:00.000Z",
+-      },
+-    ]);
+-    const orders = db.prepare("SELECT id, status, warehouse_id FROM sales_order ORDER BY id").all();
+-    expect(orders).toEqual([
+-      { id: "o1", status: "shipped", warehouse_id: main.id },
+-      { id: "o2", status: "reserved", warehouse_id: main.id },
+-    ]);
+-    expect(
+-      db.prepare("SELECT COUNT(*) AS n FROM order_line WHERE variant_id IS NOT NULL").get(),
+-    ).toEqual({ n: 2 });
+-  });
+-
+-  it("runs once: a restart does not duplicate anything", () => {
+-    const db = v3Database();
+-    migrateAppSchema(db);
+-    migrateAppSchema(db);
+-    expect(db.prepare("SELECT COUNT(*) AS n FROM warehouse").get()).toEqual({ n: 1 });
+-    expect(db.prepare("SELECT COUNT(*) AS n FROM variant").get()).toEqual({ n: 2 });
+-    expect(db.prepare("SELECT COUNT(*) AS n FROM movement").get()).toEqual({ n: 2 });
+-  });
+-});
+diff --git stg/apps/api/src/reports.test.ts stg/apps/api/src/reports.test.ts
+deleted file mode 100644
+index 1239097..0000000
+--- stg/apps/api/src/reports.test.ts
++++ /dev/null
+@@ -1,58 +0,0 @@
+-import { describe, expect, it } from "vitest";
+-
+-import { applyToValue, csvField, money, type VariantValue } from "./domain/reports.js";
+-import { body, createTestContext } from "./test-helpers.js";
+-
+-describe("moving average cost", () => {
+-  it("follows the worked example of the spec", () => {
+-    const s: VariantValue = { q: 0n, v: 0n, byWarehouse: new Map() };
+-    const m = (type: "receipt" | "issue", quantity: number, cost: number | null = null) =>
+-      applyToValue(s, {
+-        variant_id: "v",
+-        warehouse_id: "w",
+-        type,
+-        quantity,
+-        unit_cost_cents: cost,
+-      });
+-    m("receipt", 3, 100);
+-    m("receipt", 1, 200);
+-    expect([s.q, s.v]).toEqual([4n, 500n]);
+-    m("issue", -1);
+-    expect([s.q, s.v]).toEqual([3n, 375n]);
+-    m("receipt", 3, 0);
+-    m("issue", -5);
+-    expect([s.q, s.v]).toEqual([1n, 62n]);
+-  });
+-
+-  it("formats CSV fields and money", () => {
+-    expect(csvField('Washer "flat", 8 mm')).toBe('"Washer ""flat"", 8 mm"');
+-    expect(csvField("plain")).toBe("plain");
+-    expect(money(123450)).toBe("1234.50");
+-    expect(money(7)).toBe("0.07");
+-  });
+-});
+-
+-describe("report endpoints", () => {
+-  it("values stock per warehouse and is admin only", async () => {
+-    const t = await createTestContext();
+-    const admin = await t.adminCookie();
+-    const clerk = await t.signUp("Clerk", "c@example.test");
+-    const p = await body(
+-      await t.request("/api/products", { cookie: admin, body: { sku: "VAL-1", name: "Valued" } }),
+-    );
+-    await t.request(`/api/products/${p.id}/movements`, {
+-      cookie: admin,
+-      body: { type: "receipt", quantity: 3, unitCostCents: 100 },
+-    });
+-    expect((await t.request("/api/reports/valuation", { cookie: clerk })).status).toBe(403);
+-    const report = await body(await t.request("/api/reports/valuation", { cookie: admin }));
+-    expect(report).toMatchObject({
+-      totalValueCents: 300,
+-      rows: [{ sku: "VAL-1", onHand: 3, averageCostCents: 100 }],
+-    });
+-    const bad = await t.request("/api/reports/movements?from=2030-01-08&to=2030-01-07", {
+-      cookie: admin,
+-    });
+-    expect(bad.status).toBe(422);
+-  });
+-});
+diff --git stg/apps/api/src/routes/alerts.ts stg2/apps/api/src/routes/alerts.ts
+index c167cd6..c91fc94 100644
+--- stg/apps/api/src/routes/alerts.ts
++++ stg2/apps/api/src/routes/alerts.ts
+@@ -9,32 +9,17 @@ export function alertRoutes(services: Services) {
+     const rows = db
+       .prepare<
+         [],
+-        {
+-          product_id: string;
+-          variant_id: string;
+-          sku: string;
+-          name: string;
+-          variant_name: string;
+-          available: number;
+-          reorder_point: number;
+-        }
++        { id: string; sku: string; name: string; available: number; reorder_point: number }
+       >(
+-        `SELECT v.product_id, v.id AS variant_id, v.sku, p.name, v.name AS variant_name, v.reorder_point,
+-                COALESCE(SUM(s.on_hand - s.reserved), 0) AS available
+-         FROM variant v JOIN product p ON p.id = v.product_id LEFT JOIN stock s ON s.variant_id = v.id
+-         WHERE v.reorder_point > 0
+-         GROUP BY v.id
+-         HAVING available <= v.reorder_point
+-         ORDER BY v.sku`,
++        `SELECT id, sku, name, on_hand - reserved AS available, reorder_point FROM product
++         WHERE reorder_point > 0 AND on_hand - reserved <= reorder_point ORDER BY sku`,
+       )
+       .all();
+     return c.json(
+       rows.map((r) => ({
+-        productId: r.product_id,
+-        variantId: r.variant_id,
++        productId: r.id,
+         sku: r.sku,
+         name: r.name,
+-        variantName: r.variant_name,
+         available: r.available,
+         reorderPoint: r.reorder_point,
+       })),
+diff --git stg/apps/api/src/routes/orders.ts stg2/apps/api/src/routes/orders.ts
+index 76e25dd..d1cfa3e 100644
+--- stg/apps/api/src/routes/orders.ts
++++ stg2/apps/api/src/routes/orders.ts
+@@ -3,17 +3,10 @@ import { randomUUID } from "node:crypto";
+ import { Hono } from "hono";
+ import { z } from "zod";
+ 
+-import type { DB } from "../db.js";
+-import {
+-  applyMovement,
+-  findVariant,
+-  firstVariant,
+-  release,
+-  reserve,
+-  warehouseFromBody,
+-} from "../domain/inventory.js";
++import { applyMovement, release, reserve } from "../domain/inventory.js";
+ import { idSchema, quantitySchema } from "../domain/validation.js";
+ import { badRequest, conflict, notFound, readJson } from "../http.js";
++import type { DB } from "../db.js";
+ import type { Services } from "../services.js";
+ import type { AppEnv } from "../session.js";
+ 
+@@ -25,16 +18,10 @@ const orderSchema = z.object({
+     .trim()
+     .min(2, "Customer must be 2-80 characters")
+     .max(80, "Customer must be 2-80 characters"),
+-  warehouseId: idSchema.optional(),
+   lines: z
+-    .array(
+-      z.object({
+-        productId: idSchema.optional(),
+-        variantId: idSchema.optional(),
+-        quantity: quantitySchema,
+-      }),
+-      { error: "Lines are required" },
+-    )
++    .array(z.object({ productId: idSchema, quantity: quantitySchema }), {
++      error: "Lines are required",
++    })
+     .min(1, "An order needs at least one line")
+     .max(20, "An order can have at most 20 lines"),
+ });
+@@ -43,26 +30,24 @@ interface OrderRow {
+   id: string;
+   customer: string;
+   status: OrderStatus;
+-  warehouse_id: string;
+   created_at: string;
+   created_by_name: string;
+ }
+ 
+ interface LineRow {
+   product_id: string;
+-  variant_id: string;
+   sku: string;
+   quantity: number;
+ }
+ 
+ const ORDER_SELECT = `
+-  SELECT o.id, o.customer, o.status, o.warehouse_id, o.created_at, u.name AS created_by_name
++  SELECT o.id, o.customer, o.status, o.created_at, u.name AS created_by_name
+   FROM sales_order o JOIN user u ON u.id = o.created_by`;
+ 
+ function orderLines(db: DB, orderId: string): LineRow[] {
+   return db
+     .prepare<[string], LineRow>(
+-      `SELECT l.product_id, l.variant_id, v.sku, l.quantity FROM order_line l JOIN variant v ON v.id = l.variant_id
++      `SELECT l.product_id, p.sku, l.quantity FROM order_line l JOIN product p ON p.id = l.product_id
+        WHERE l.order_id = ? ORDER BY l.line_no`,
+     )
+     .all(orderId);
+@@ -75,10 +60,8 @@ export function loadOrder(db: DB, id: string) {
+     id: row.id,
+     customer: row.customer,
+     status: row.status,
+-    warehouseId: row.warehouse_id,
+     lines: orderLines(db, row.id).map((l) => ({
+       productId: l.product_id,
+-      variantId: l.variant_id,
+       sku: l.sku,
+       quantity: l.quantity,
+     })),
+@@ -91,14 +74,12 @@ export function orderRoutes(services: Services) {
+   const { db } = services;
+   const app = new Hono<AppEnv>();
+ 
+-  const stateOf = (id: string) => {
++  const statusOf = (id: string) => {
+     const row = db
+-      .prepare<[string], { status: OrderStatus; warehouse_id: string }>(
+-        "SELECT status, warehouse_id FROM sales_order WHERE id = ?",
+-      )
++      .prepare<[string], { status: OrderStatus }>("SELECT status FROM sales_order WHERE id = ?")
+       .get(id);
+     if (!row) throw notFound("Order not found");
+-    return row;
++    return row.status;
+   };
+   const setStatus = (id: string, status: OrderStatus) =>
+     db
+@@ -125,36 +106,26 @@ export function orderRoutes(services: Services) {
+ 
+   app.post("/", async (c) => {
+     const body = await readJson(c, orderSchema);
+-    const warehouse = warehouseFromBody(db, body.warehouseId);
+-    const lines = body.lines.map((line) => {
+-      if ((line.productId === undefined) === (line.variantId === undefined)) {
+-        throw badRequest("Each line needs either productId or variantId");
+-      }
+-      if (line.variantId !== undefined) {
+-        const variant = findVariant(db, line.variantId);
+-        if (!variant) throw badRequest(`Unknown variant ${line.variantId}`);
+-        return { variantId: variant.id, productId: variant.product_id, quantity: line.quantity };
+-      }
+-      const productId = line.productId ?? "";
++    const productIds = body.lines.map((l) => l.productId);
++    if (new Set(productIds).size !== productIds.length) {
++      throw badRequest("Each product may appear only once per order");
++    }
++    for (const productId of productIds) {
+       if (!db.prepare("SELECT 1 FROM product WHERE id = ?").get(productId)) {
+         throw badRequest(`Unknown product ${productId}`);
+       }
+-      return { variantId: firstVariant(db, productId).id, productId, quantity: line.quantity };
+-    });
+-    if (new Set(lines.map((l) => l.variantId)).size !== lines.length) {
+-      throw badRequest("Each product variant may appear only once per order");
+     }
+     const id = randomUUID();
+     const at = services.now().toISOString();
+     db.transaction(() => {
+       db.prepare(
+-        "INSERT INTO sales_order (id, customer, status, warehouse_id, created_by, created_at, updated_at) VALUES (?, ?, 'reserved', ?, ?, ?, ?)",
+-      ).run(id, body.customer, warehouse.id, c.get("user").id, at, at);
+-      lines.forEach((line, index) => {
+-        reserve(db, line.variantId, warehouse.id, line.quantity);
++        "INSERT INTO sales_order (id, customer, status, created_by, created_at, updated_at) VALUES (?, ?, 'reserved', ?, ?, ?)",
++      ).run(id, body.customer, c.get("user").id, at, at);
++      body.lines.forEach((line, index) => {
++        reserve(db, line.productId, line.quantity);
+         db.prepare(
+-          "INSERT INTO order_line (order_id, line_no, product_id, variant_id, quantity) VALUES (?, ?, ?, ?, ?)",
+-        ).run(id, index + 1, line.productId, line.variantId, line.quantity);
++          "INSERT INTO order_line (order_id, line_no, product_id, quantity) VALUES (?, ?, ?, ?)",
++        ).run(id, index + 1, line.productId, line.quantity);
+       });
+     }).immediate();
+     return c.json(loadOrder(db, id), 201);
+@@ -164,21 +135,17 @@ export function orderRoutes(services: Services) {
+     const id = c.req.param("id");
+     const userId = c.get("user").id;
+     db.transaction(() => {
+-      const { status, warehouse_id } = stateOf(id);
+-      if (status !== "reserved") {
+-        throw conflict(`Only reserved orders can be shipped (this one is ${status})`);
+-      }
++      const status = statusOf(id);
++      if (status !== "reserved") throw conflict(`Only reserved orders can be shipped (this one is ${status})`);
+       const at = services.now().toISOString();
+       for (const line of orderLines(db, id)) {
+         applyMovement(db, {
+-          variantId: line.variant_id,
+-          warehouseId: warehouse_id,
++          productId: line.product_id,
+           type: "shipment",
+           quantity: -line.quantity,
+           unitCostCents: null,
+           reason: null,
+           orderId: id,
+-          transferId: null,
+           userId,
+           at,
+         });
+@@ -191,11 +158,10 @@ export function orderRoutes(services: Services) {
+   app.post("/:id/cancel", (c) => {
+     const id = c.req.param("id");
+     db.transaction(() => {
+-      const { status, warehouse_id } = stateOf(id);
++      const status = statusOf(id);
+       if (status === "cancelled") return;
+       if (status !== "reserved") throw conflict("Shipped orders cannot be cancelled");
+-      for (const line of orderLines(db, id))
+-        release(db, line.variant_id, warehouse_id, line.quantity);
++      for (const line of orderLines(db, id)) release(db, line.product_id, line.quantity);
+       setStatus(id, "cancelled");
+     }).immediate();
+     return c.json(loadOrder(db, id));
+diff --git stg/apps/api/src/routes/products.ts stg2/apps/api/src/routes/products.ts
+index 1fb0cfe..8f11253 100644
+--- stg/apps/api/src/routes/products.ts
++++ stg2/apps/api/src/routes/products.ts
+@@ -5,27 +5,20 @@ import { z } from "zod";
+ 
+ import {
+   applyMovement,
+-  findVariant,
+-  firstVariant,
+-  insertVariant,
+   listMovements,
+   loadMovement,
+-  loadProductRow,
+-  productView,
+-  skuTaken,
+-  variantView,
+-  warehouseFromBody,
++  loadProduct,
++  toProduct,
++  type ProductRow,
+ } from "../domain/inventory.js";
+ import {
+   descriptionSchema,
+-  idSchema,
+   productNameSchema,
+   quantitySchema,
+   reorderPointSchema,
+   signedQuantitySchema,
+   skuSchema,
+   unitCostSchema,
+-  variantNameSchema,
+ } from "../domain/validation.js";
+ import { badRequest, conflict, forbidden, readJson } from "../http.js";
+ import type { Services } from "../services.js";
+@@ -45,36 +38,19 @@ const patchSchema = z.object({
+   reorderPoint: reorderPointSchema.optional(),
+ });
+ 
+-const variantSchema = z.object({
+-  sku: skuSchema,
+-  name: variantNameSchema,
+-  reorderPoint: reorderPointSchema.optional(),
+-});
+-
+ const reasonSchema = z
+   .string({ error: "Reason must be text" })
+   .trim()
+   .max(200, "Reason must be at most 200 characters");
+ 
+-const target = {
+-  variantId: idSchema.optional(),
+-  warehouseId: idSchema.optional(),
+-};
+-
+ const movementSchema = z.discriminatedUnion(
+   "type",
+   [
+-    z.object({
+-      type: z.literal("receipt"),
+-      quantity: quantitySchema,
+-      unitCostCents: unitCostSchema,
+-      ...target,
+-    }),
++    z.object({ type: z.literal("receipt"), quantity: quantitySchema, unitCostCents: unitCostSchema }),
+     z.object({
+       type: z.literal("issue"),
+       quantity: quantitySchema,
+       reason: reasonSchema.nullable().optional(),
+-      ...target,
+     }),
+     z.object({
+       type: z.literal("adjustment"),
+@@ -84,7 +60,6 @@ const movementSchema = z.discriminatedUnion(
+         .trim()
+         .min(3, "Reason must be 3-200 characters")
+         .max(200, "Reason must be 3-200 characters"),
+-      ...target,
+     }),
+   ],
+   { error: "Type must be receipt, issue or adjustment" },
+@@ -97,152 +72,96 @@ export function productRoutes(services: Services) {
+   const { db } = services;
+   const app = new Hono<AppEnv>();
+ 
++  const skuTaken = (sku: string) =>
++    db.prepare<[string], { id: string }>("SELECT id FROM product WHERE sku = ?").get(sku);
++
+   app.get("/", (c) => {
+     const q = c.req.query("q")?.trim();
+-    const ids = q
++    const rows = q
+       ? db
+-          .prepare<[string, string], { id: string }>(
+-            `SELECT p.id FROM product p JOIN variant v ON v.product_id = p.id AND v.position = 0
+-             WHERE instr(lower(p.name), lower(?)) > 0
+-                OR EXISTS (SELECT 1 FROM variant x WHERE x.product_id = p.id AND instr(lower(x.sku), lower(?)) > 0)
+-             ORDER BY v.sku`,
++          .prepare<[string, string], ProductRow>(
++            "SELECT * FROM product WHERE instr(lower(sku), lower(?)) > 0 OR instr(lower(name), lower(?)) > 0 ORDER BY sku",
+           )
+           .all(q, q)
+-      : db
+-          .prepare<[], { id: string }>(
+-            "SELECT p.id FROM product p JOIN variant v ON v.product_id = p.id AND v.position = 0 ORDER BY v.sku",
+-          )
+-          .all();
+-    return c.json(ids.map(({ id }) => productView(db, id)));
++      : db.prepare<[], ProductRow>("SELECT * FROM product ORDER BY sku").all();
++    return c.json(rows.map(toProduct));
+   });
+ 
+-  app.get("/:id", (c) => c.json(productView(db, c.req.param("id"))));
++  app.get("/:id", (c) => c.json(toProduct(loadProduct(db, c.req.param("id")))));
+ 
+   app.post("/", requireAdmin, async (c) => {
+     const body = await readJson(c, createSchema);
++    if (skuTaken(body.sku)) throw conflict(`SKU ${body.sku} already exists`);
+     const id = randomUUID();
+-    const at = services.now().toISOString();
+-    db.transaction(() => {
+-      if (skuTaken(db, body.sku)) throw conflict(`SKU ${body.sku} already exists`);
+-      db.prepare("INSERT INTO product (id, name, description, created_at) VALUES (?, ?, ?, ?)").run(
+-        id,
+-        body.name,
+-        emptyToNull(body.description),
+-        at,
+-      );
+-      insertVariant(db, {
+-        productId: id,
+-        sku: body.sku,
+-        name: "Default",
+-        reorderPoint: body.reorderPoint ?? 0,
+-        at,
+-      });
+-    }).immediate();
+-    return c.json(productView(db, id), 201);
++    db.prepare(
++      "INSERT INTO product (id, sku, name, description, reorder_point, created_at) VALUES (?, ?, ?, ?, ?, ?)",
++    ).run(
++      id,
++      body.sku,
++      body.name,
++      emptyToNull(body.description),
++      body.reorderPoint ?? 0,
++      services.now().toISOString(),
++    );
++    return c.json(toProduct(loadProduct(db, id)), 201);
+   });
+ 
+   app.patch("/:id", requireAdmin, async (c) => {
+-    const product = loadProductRow(db, c.req.param("id"));
++    const product = loadProduct(db, c.req.param("id"));
+     const body = await readJson(c, patchSchema);
+-    const first = firstVariant(db, product.id);
+-    if (body.sku !== undefined && body.sku !== first.sku) throw badRequest("SKU cannot be changed");
+-    db.transaction(() => {
+-      db.prepare("UPDATE product SET name = ?, description = ? WHERE id = ?").run(
+-        body.name ?? product.name,
+-        body.description === undefined ? product.description : emptyToNull(body.description),
+-        product.id,
+-      );
+-      if (body.reorderPoint !== undefined) {
+-        db.prepare("UPDATE variant SET reorder_point = ? WHERE id = ?").run(
+-          body.reorderPoint,
+-          first.id,
+-        );
+-      }
+-    })();
+-    return c.json(productView(db, product.id));
++    if (body.sku !== undefined && body.sku !== product.sku) {
++      throw badRequest("SKU cannot be changed");
++    }
++    db.prepare(
++      "UPDATE product SET name = ?, description = ?, reorder_point = ? WHERE id = ?",
++    ).run(
++      body.name ?? product.name,
++      body.description === undefined ? product.description : emptyToNull(body.description),
++      body.reorderPoint ?? product.reorder_point,
++      product.id,
++    );
++    return c.json(toProduct(loadProduct(db, product.id)));
+   });
+ 
+   app.delete("/:id", requireAdmin, (c) => {
+-    const product = loadProductRow(db, c.req.param("id"));
+-    db.transaction(() => {
+-      const used = db
+-        .prepare<[string, string], { n: number }>(
+-          "SELECT (SELECT COUNT(*) FROM movement WHERE product_id = ?) + (SELECT COUNT(*) FROM order_line WHERE product_id = ?) AS n",
+-        )
+-        .get(product.id, product.id);
+-      if (used && used.n > 0) {
+-        throw conflict("This product has stock movements or orders and cannot be deleted");
+-      }
+-      db.prepare(
+-        "DELETE FROM stock WHERE variant_id IN (SELECT id FROM variant WHERE product_id = ?)",
+-      ).run(product.id);
+-      db.prepare("DELETE FROM variant WHERE product_id = ?").run(product.id);
+-      db.prepare("DELETE FROM product WHERE id = ?").run(product.id);
+-    }).immediate();
++    const product = loadProduct(db, c.req.param("id"));
++    const used = db
++      .prepare<[string, string], { n: number }>(
++        "SELECT (SELECT COUNT(*) FROM movement WHERE product_id = ?) + (SELECT COUNT(*) FROM order_line WHERE product_id = ?) AS n",
++      )
++      .get(product.id, product.id);
++    if (used && used.n > 0) {
++      throw conflict("This product has stock movements or orders and cannot be deleted");
++    }
++    db.prepare("DELETE FROM product WHERE id = ?").run(product.id);
+     return c.json({ ok: true });
+   });
+ 
+-  app.post("/:id/variants", requireAdmin, async (c) => {
+-    const product = loadProductRow(db, c.req.param("id"));
+-    const body = await readJson(c, variantSchema);
+-    const id = db
+-      .transaction(() => {
+-        if (skuTaken(db, body.sku)) throw conflict(`SKU ${body.sku} already exists`);
+-        return insertVariant(db, {
+-          productId: product.id,
+-          sku: body.sku,
+-          name: body.name,
+-          reorderPoint: body.reorderPoint ?? 0,
+-          at: services.now().toISOString(),
+-        });
+-      })
+-      .immediate();
+-    return c.json(variantView(db, id), 201);
+-  });
+-
+   app.get("/:id/movements", (c) => {
+-    const product = loadProductRow(db, c.req.param("id"));
+-    return c.json(
+-      listMovements(db, product.id, {
+-        variantId: c.req.query("variantId") || undefined,
+-        warehouseId: c.req.query("warehouseId") || undefined,
+-      }),
+-    );
++    const product = loadProduct(db, c.req.param("id"));
++    return c.json(listMovements(db, product.id));
+   });
+ 
+   app.post("/:id/movements", async (c) => {
+-    const product = loadProductRow(db, c.req.param("id"));
++    const productId = loadProduct(db, c.req.param("id")).id;
+     const body = await readJson(c, movementSchema);
+     const user = c.get("user");
+     if (body.type === "adjustment" && user.role !== "admin") {
+       throw forbidden("Only admins can record adjustments");
+     }
+-    let variantId = firstVariant(db, product.id).id;
+-    if (body.variantId !== undefined) {
+-      const variant = findVariant(db, body.variantId);
+-      if (!variant || variant.product_id !== product.id) {
+-        throw badRequest("The variant does not belong to this product");
+-      }
+-      variantId = variant.id;
+-    }
+-    const warehouse = warehouseFromBody(db, body.warehouseId);
+     const quantity = body.type === "issue" ? -body.quantity : body.quantity;
+-    const id = db
+-      .transaction(() =>
+-        applyMovement(db, {
+-          variantId,
+-          warehouseId: warehouse.id,
+-          type: body.type,
+-          quantity,
+-          unitCostCents: body.type === "receipt" ? body.unitCostCents : null,
+-          reason: body.type === "receipt" ? null : emptyToNull(body.reason),
+-          orderId: null,
+-          transferId: null,
+-          userId: user.id,
+-          at: services.now().toISOString(),
+-        }),
+-      )
+-      .immediate();
++    const id = db.transaction(() =>
++      applyMovement(db, {
++        productId,
++        type: body.type,
++        quantity,
++        unitCostCents: body.type === "receipt" ? body.unitCostCents : null,
++        reason: body.type === "receipt" ? null : emptyToNull(body.reason),
++        orderId: null,
++        userId: user.id,
++        at: services.now().toISOString(),
++      }),
++    ).immediate();
+     return c.json(loadMovement(db, id), 201);
+   });
+ 
+diff --git stg/apps/api/src/routes/reports.ts stg/apps/api/src/routes/reports.ts
+deleted file mode 100644
+index d0eb6b4..0000000
+--- stg/apps/api/src/routes/reports.ts
++++ /dev/null
+@@ -1,105 +0,0 @@
+-import { Hono, type Context } from "hono";
+-
+-import { findWarehouse } from "../domain/inventory.js";
+-import { money, movementReport, toCsv, valuationReport } from "../domain/reports.js";
+-import { badRequest } from "../http.js";
+-import type { Services } from "../services.js";
+-import { requireAdmin, type AppEnv } from "../session.js";
+-
+-const DATE = /^\d{4}-\d{2}-\d{2}$/;
+-
+-function validDate(value: string | undefined, label: string): string {
+-  if (!value || !DATE.test(value)) throw badRequest(`${label} must be a date (YYYY-MM-DD)`);
+-  const d = new Date(`${value}T00:00:00.000Z`);
+-  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== value) {
+-    throw badRequest(`${label} must be a valid date`);
+-  }
+-  return value;
+-}
+-
+-const period = (c: Context<AppEnv>) => {
+-  const from = validDate(c.req.query("from"), "From");
+-  const to = validDate(c.req.query("to"), "To");
+-  if (from > to) throw badRequest("From must not be after To");
+-  return { from, to };
+-};
+-
+-const csv = (c: Context<AppEnv>, name: string, body: string) =>
+-  c.body(body, 200, {
+-    "Content-Type": "text/csv; charset=utf-8",
+-    "Content-Disposition": `attachment; filename="${name}"`,
+-  });
+-
+-export function reportRoutes(services: Services) {
+-  const { db } = services;
+-  const app = new Hono<AppEnv>();
+-  app.use("*", requireAdmin);
+-
+-  const warehouseParam = (c: Context<AppEnv>) => {
+-    const id = c.req.query("warehouseId");
+-    if (!id) return undefined;
+-    if (!findWarehouse(db, id)) throw badRequest(`Unknown warehouse ${id}`);
+-    return id;
+-  };
+-
+-  app.get("/valuation", (c) => c.json(valuationReport(db, warehouseParam(c))));
+-
+-  app.get("/valuation.csv", (c) => {
+-    const report = valuationReport(db, warehouseParam(c));
+-    return csv(
+-      c,
+-      "valuation.csv",
+-      toCsv(
+-        ["SKU", "Product", "Variant", "On hand", "Average cost", "Value"],
+-        report.rows.map((r) => [
+-          r.sku,
+-          r.productName,
+-          r.variantName,
+-          r.onHand,
+-          money(r.averageCostCents),
+-          money(r.valueCents),
+-        ]),
+-      ),
+-    );
+-  });
+-
+-  app.get("/movements", (c) => {
+-    const { from, to } = period(c);
+-    return c.json(movementReport(db, from, to, warehouseParam(c)));
+-  });
+-
+-  app.get("/movements.csv", (c) => {
+-    const { from, to } = period(c);
+-    const report = movementReport(db, from, to, warehouseParam(c));
+-    return csv(
+-      c,
+-      `movements-${from}-${to}.csv`,
+-      toCsv(
+-        [
+-          "SKU",
+-          "Product",
+-          "Variant",
+-          "Opening",
+-          "Received",
+-          "Shipped",
+-          "Adjusted",
+-          "Transferred",
+-          "Closing",
+-        ],
+-        report.rows.map((r) => [
+-          r.sku,
+-          r.productName,
+-          r.variantName,
+-          r.opening,
+-          r.received,
+-          r.shipped,
+-          r.adjusted,
+-          r.transferred,
+-          r.closing,
+-        ]),
+-      ),
+-    );
+-  });
+-
+-  return app;
+-}
+diff --git stg/apps/api/src/routes/transfers.ts stg/apps/api/src/routes/transfers.ts
+deleted file mode 100644
+index c2d9083..0000000
+--- stg/apps/api/src/routes/transfers.ts
++++ /dev/null
+@@ -1,116 +0,0 @@
+-import { randomUUID } from "node:crypto";
+-
+-import { Hono } from "hono";
+-import { z } from "zod";
+-
+-import type { DB } from "../db.js";
+-import { applyMovement, findVariant, findWarehouse } from "../domain/inventory.js";
+-import { idSchema, quantitySchema } from "../domain/validation.js";
+-import { badRequest, notFound, readJson } from "../http.js";
+-import type { Services } from "../services.js";
+-import type { AppEnv } from "../session.js";
+-
+-const transferSchema = z.object({
+-  variantId: idSchema,
+-  fromWarehouseId: idSchema,
+-  toWarehouseId: idSchema,
+-  quantity: quantitySchema,
+-});
+-
+-interface TransferRow {
+-  id: string;
+-  variant_id: string;
+-  sku: string;
+-  from_warehouse_id: string;
+-  to_warehouse_id: string;
+-  quantity: number;
+-  created_at: string;
+-  created_by_name: string;
+-}
+-
+-const TRANSFER_SELECT = `
+-  SELECT t.id, t.variant_id, v.sku, t.from_warehouse_id, t.to_warehouse_id, t.quantity, t.created_at,
+-         u.name AS created_by_name
+-  FROM transfer t JOIN variant v ON v.id = t.variant_id JOIN user u ON u.id = t.created_by`;
+-
+-const toTransfer = (r: TransferRow) => ({
+-  id: r.id,
+-  variantId: r.variant_id,
+-  sku: r.sku,
+-  fromWarehouseId: r.from_warehouse_id,
+-  toWarehouseId: r.to_warehouse_id,
+-  quantity: r.quantity,
+-  createdAt: r.created_at,
+-  createdBy: r.created_by_name,
+-});
+-
+-function loadTransfer(db: DB, id: string) {
+-  const row = db.prepare<[string], TransferRow>(`${TRANSFER_SELECT} WHERE t.id = ?`).get(id);
+-  if (!row) throw notFound("Transfer not found");
+-  return toTransfer(row);
+-}
+-
+-export function transferRoutes(services: Services) {
+-  const { db } = services;
+-  const app = new Hono<AppEnv>();
+-
+-  app.get("/", (c) =>
+-    c.json(
+-      db
+-        .prepare<[], TransferRow>(`${TRANSFER_SELECT} ORDER BY t.created_at DESC, t.rowid DESC`)
+-        .all()
+-        .map(toTransfer),
+-    ),
+-  );
+-
+-  app.post("/", async (c) => {
+-    const body = await readJson(c, transferSchema);
+-    if (body.fromWarehouseId === body.toWarehouseId) {
+-      throw badRequest("Source and destination must be different warehouses");
+-    }
+-    if (!findVariant(db, body.variantId)) throw badRequest(`Unknown variant ${body.variantId}`);
+-    for (const id of [body.fromWarehouseId, body.toWarehouseId]) {
+-      if (!findWarehouse(db, id)) throw badRequest(`Unknown warehouse ${id}`);
+-    }
+-    const id = randomUUID();
+-    const userId = c.get("user").id;
+-    const at = services.now().toISOString();
+-    db.transaction(() => {
+-      db.prepare(
+-        "INSERT INTO transfer (id, variant_id, from_warehouse_id, to_warehouse_id, quantity, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+-      ).run(
+-        id,
+-        body.variantId,
+-        body.fromWarehouseId,
+-        body.toWarehouseId,
+-        body.quantity,
+-        userId,
+-        at,
+-      );
+-      const common = {
+-        variantId: body.variantId,
+-        unitCostCents: null,
+-        reason: null,
+-        orderId: null,
+-        transferId: id,
+-        userId,
+-        at,
+-      };
+-      applyMovement(db, {
+-        ...common,
+-        warehouseId: body.fromWarehouseId,
+-        type: "transfer_out",
+-        quantity: -body.quantity,
+-      });
+-      applyMovement(db, {
+-        ...common,
+-        warehouseId: body.toWarehouseId,
+-        type: "transfer_in",
+-        quantity: body.quantity,
+-      });
+-    }).immediate();
+-    return c.json(loadTransfer(db, id), 201);
+-  });
+-
+-  return app;
+-}
+diff --git stg/apps/api/src/routes/variants.ts stg/apps/api/src/routes/variants.ts
+deleted file mode 100644
+index 25ceffa..0000000
+--- stg/apps/api/src/routes/variants.ts
++++ /dev/null
+@@ -1,37 +0,0 @@
+-import { Hono } from "hono";
+-import { z } from "zod";
+-
+-import { findVariant, variantView } from "../domain/inventory.js";
+-import { reorderPointSchema, skuSchema, variantNameSchema } from "../domain/validation.js";
+-import { badRequest, notFound, readJson } from "../http.js";
+-import type { Services } from "../services.js";
+-import { requireAdmin, type AppEnv } from "../session.js";
+-
+-const patchSchema = z.object({
+-  sku: skuSchema.optional(),
+-  name: variantNameSchema.optional(),
+-  reorderPoint: reorderPointSchema.optional(),
+-});
+-
+-export function variantRoutes(services: Services) {
+-  const { db } = services;
+-  const app = new Hono<AppEnv>();
+-
+-  app.get("/:id", (c) => c.json(variantView(db, c.req.param("id"))));
+-
+-  app.patch("/:id", requireAdmin, async (c) => {
+-    const variant = findVariant(db, c.req.param("id"));
+-    if (!variant) throw notFound("Variant not found");
+-    const body = await readJson(c, patchSchema);
+-    if (body.sku !== undefined && body.sku !== variant.sku)
+-      throw badRequest("SKU cannot be changed");
+-    db.prepare("UPDATE variant SET name = ?, reorder_point = ? WHERE id = ?").run(
+-      body.name ?? variant.name,
+-      body.reorderPoint ?? variant.reorder_point,
+-      variant.id,
+-    );
+-    return c.json(variantView(db, variant.id));
+-  });
+-
+-  return app;
+-}
+diff --git stg/apps/api/src/routes/warehouses.ts stg/apps/api/src/routes/warehouses.ts
+deleted file mode 100644
+index f8e6efe..0000000
+--- stg/apps/api/src/routes/warehouses.ts
++++ /dev/null
+@@ -1,59 +0,0 @@
+-import { randomUUID } from "node:crypto";
+-
+-import { Hono } from "hono";
+-import { z } from "zod";
+-
+-import { findWarehouse, type WarehouseRow } from "../domain/inventory.js";
+-import { warehouseCodeSchema, warehouseNameSchema } from "../domain/validation.js";
+-import { badRequest, conflict, notFound, readJson } from "../http.js";
+-import type { Services } from "../services.js";
+-import { requireAdmin, type AppEnv } from "../session.js";
+-
+-const createSchema = z.object({ code: warehouseCodeSchema, name: warehouseNameSchema });
+-const patchSchema = z.object({
+-  code: warehouseCodeSchema.optional(),
+-  name: warehouseNameSchema.optional(),
+-});
+-
+-export function warehouseRoutes(services: Services) {
+-  const { db } = services;
+-  const app = new Hono<AppEnv>();
+-
+-  app.get("/", (c) =>
+-    c.json(
+-      db.prepare<[], WarehouseRow>("SELECT id, code, name FROM warehouse ORDER BY code").all(),
+-    ),
+-  );
+-
+-  app.post("/", requireAdmin, async (c) => {
+-    const body = await readJson(c, createSchema);
+-    const id = randomUUID();
+-    db.transaction(() => {
+-      if (db.prepare("SELECT 1 FROM warehouse WHERE code = ?").get(body.code)) {
+-        throw conflict(`Warehouse ${body.code} already exists`);
+-      }
+-      db.prepare("INSERT INTO warehouse (id, code, name, created_at) VALUES (?, ?, ?, ?)").run(
+-        id,
+-        body.code,
+-        body.name,
+-        services.now().toISOString(),
+-      );
+-    }).immediate();
+-    return c.json(findWarehouse(db, id), 201);
+-  });
+-
+-  app.patch("/:id", requireAdmin, async (c) => {
+-    const warehouse = findWarehouse(db, c.req.param("id"));
+-    if (!warehouse) throw notFound("Warehouse not found");
+-    const body = await readJson(c, patchSchema);
+-    if (body.code !== undefined && body.code !== warehouse.code)
+-      throw badRequest("Code cannot be changed");
+-    db.prepare("UPDATE warehouse SET name = ? WHERE id = ?").run(
+-      body.name ?? warehouse.name,
+-      warehouse.id,
+-    );
+-    return c.json(findWarehouse(db, warehouse.id));
+-  });
+-
+-  return app;
+-}
+diff --git stg/apps/web/src/components/AppLayout.tsx stg2/apps/web/src/components/AppLayout.tsx
+index 0ce966b..45feedd 100644
+--- stg/apps/web/src/components/AppLayout.tsx
++++ stg2/apps/web/src/components/AppLayout.tsx
+@@ -48,24 +48,13 @@ export function AppLayout() {
+             <Link to="/orders" className={navClass} activeProps={activeProps}>
+               Orders
+             </Link>
+-            <Link to="/transfers" className={navClass} activeProps={activeProps}>
+-              Transfers
+-            </Link>
+             <Link to="/alerts" className={navClass} activeProps={activeProps}>
+               Alerts
+             </Link>
+             {user?.role === "admin" && (
+-              <>
+-                <Link to="/warehouses" className={navClass} activeProps={activeProps}>
+-                  Warehouses
+-                </Link>
+-                <Link to="/reports" className={navClass} activeProps={activeProps}>
+-                  Reports
+-                </Link>
+-                <Link to="/users" className={navClass} activeProps={activeProps}>
+-                  Users
+-                </Link>
+-              </>
++              <Link to="/users" className={navClass} activeProps={activeProps}>
++                Users
++              </Link>
+             )}
+           </nav>
+           <div className="ml-auto flex items-center gap-3 sm:ml-0">
+diff --git stg/apps/web/src/components/Dialog.tsx stg2/apps/web/src/components/Dialog.tsx
+index 8656b10..c2f4725 100644
+--- stg/apps/web/src/components/Dialog.tsx
++++ stg2/apps/web/src/components/Dialog.tsx
+@@ -54,7 +54,7 @@ export function Dialog({ title, onClose, children }: DialogProps) {
+             type="button"
+             data-dialog-close
+             onClick={onClose}
+-            className="min-h-8 rounded px-3 py-1 text-sm text-slate-600 hover:bg-slate-100"
++            className="rounded px-2 text-sm text-slate-600 hover:bg-slate-100"
+           >
+             Close
+           </button>
+diff --git stg/apps/web/src/components/MovementForm.tsx stg2/apps/web/src/components/MovementForm.tsx
+index 7127f1e..7e2a068 100644
+--- stg/apps/web/src/components/MovementForm.tsx
++++ stg2/apps/web/src/components/MovementForm.tsx
+@@ -1,8 +1,8 @@
+-import { useQuery, useQueryClient } from "@tanstack/react-query";
++import { useQueryClient } from "@tanstack/react-query";
+ import { useState, type FormEvent } from "react";
+ 
+ import { api } from "@/lib/api.ts";
+-import { parseCents, warehousesQuery, type MovementType, type Product } from "@/lib/inventory.ts";
++import { parseCents, type MovementType } from "@/lib/inventory.ts";
+ 
+ import { ErrorAlert, StatusMessage } from "./Alert.tsx";
+ import { TextField } from "./Field.tsx";
+@@ -14,14 +14,8 @@ import { useAction } from "./useAction.ts";
+ const toMovementType = (value: string): MovementType =>
+   value === "issue" || value === "adjustment" ? value : "receipt";
+ 
+-export function MovementForm({ product, isAdmin }: { product: Product; isAdmin: boolean }) {
+-  const productId = product.id;
++export function MovementForm({ productId, isAdmin }: { productId: string; isAdmin: boolean }) {
+   const queryClient = useQueryClient();
+-  const warehouses = useQuery(warehousesQuery);
+-  const [variantId, setVariantId] = useState(product.variants[0]?.id ?? "");
+-  const [warehouseId, setWarehouseId] = useState("");
+-  const mainId = warehouses.data?.find((w) => w.code === "MAIN")?.id ?? "";
+-  const selectedWarehouse = warehouseId || mainId;
+   const [type, setType] = useState<MovementType>("receipt");
+   const [quantity, setQuantity] = useState("");
+   const [unitCost, setUnitCost] = useState("");
+@@ -30,8 +24,7 @@ export function MovementForm({ product, isAdmin }: { product: Product; isAdmin:
+ 
+   const submit = async (event: FormEvent) => {
+     event.preventDefault();
+-    const body: Record<string, unknown> = { type, quantity: Number(quantity), variantId };
+-    if (selectedWarehouse) body.warehouseId = selectedWarehouse;
++    const body: Record<string, unknown> = { type, quantity: Number(quantity) };
+     if (quantity.trim() === "") body.quantity = null;
+     if (type === "receipt") {
+       const cents = parseCents(unitCost);
+@@ -60,29 +53,7 @@ export function MovementForm({ product, isAdmin }: { product: Product; isAdmin:
+       onSubmit={(e) => void submit(e)}
+       className="grid gap-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:grid-cols-2"
+     >
+-      <SelectField label="Variant" value={variantId} onChange={(e) => setVariantId(e.target.value)}>
+-        {product.variants.map((v) => (
+-          <option key={v.id} value={v.id}>
+-            {v.sku} ({v.name})
+-          </option>
+-        ))}
+-      </SelectField>
+-      <SelectField
+-        label="Warehouse"
+-        value={selectedWarehouse}
+-        onChange={(e) => setWarehouseId(e.target.value)}
+-      >
+-        {warehouses.data?.map((w) => (
+-          <option key={w.id} value={w.id}>
+-            {w.name}
+-          </option>
+-        ))}
+-      </SelectField>
+-      <SelectField
+-        label="Type"
+-        value={type}
+-        onChange={(e) => setType(toMovementType(e.target.value))}
+-      >
++      <SelectField label="Type" value={type} onChange={(e) => setType(toMovementType(e.target.value))}>
+         <option value="receipt">Receipt</option>
+         <option value="issue">Issue</option>
+         {isAdmin && <option value="adjustment">Adjustment</option>}
+diff --git stg/apps/web/src/components/Page.tsx stg2/apps/web/src/components/Page.tsx
+index f787510..0951352 100644
+--- stg/apps/web/src/components/Page.tsx
++++ stg2/apps/web/src/components/Page.tsx
+@@ -19,9 +19,7 @@ export function Section({ title, children }: { title: string; children: ReactNod
+ }
+ 
+ export function Card({ children }: { children: ReactNode }) {
+-  return (
+-    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">{children}</div>
+-  );
++  return <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">{children}</div>;
+ }
+ 
+ export function Loading() {
+diff --git stg/apps/web/src/components/VariantDialog.tsx stg/apps/web/src/components/VariantDialog.tsx
+deleted file mode 100644
+index 24d130f..0000000
+--- stg/apps/web/src/components/VariantDialog.tsx
++++ /dev/null
+@@ -1,52 +0,0 @@
+-import { useQueryClient } from "@tanstack/react-query";
+-import { useState, type FormEvent } from "react";
+-
+-import { api } from "@/lib/api.ts";
+-
+-import { ErrorAlert } from "./Alert.tsx";
+-import { Dialog } from "./Dialog.tsx";
+-import { TextField } from "./Field.tsx";
+-import { PendingButton } from "./PendingButton.tsx";
+-import { primaryButton } from "./ui.ts";
+-import { useAction } from "./useAction.ts";
+-
+-export function VariantDialog({ productId, onClose }: { productId: string; onClose: () => void }) {
+-  const queryClient = useQueryClient();
+-  const [sku, setSku] = useState("");
+-  const [name, setName] = useState("");
+-  const [reorderPoint, setReorderPoint] = useState("0");
+-  const { pending, error, run } = useAction();
+-
+-  const submit = async (event: FormEvent) => {
+-    event.preventDefault();
+-    const ok = await run(() =>
+-      api(`/api/products/${productId}/variants`, {
+-        body: { sku, name, reorderPoint: reorderPoint.trim() === "" ? 0 : Number(reorderPoint) },
+-      }),
+-    );
+-    if (ok) {
+-      await queryClient.invalidateQueries({ queryKey: ["products"] });
+-      onClose();
+-    }
+-  };
+-
+-  return (
+-    <Dialog title="Add variant" onClose={onClose}>
+-      <form noValidate onSubmit={(e) => void submit(e)} className="flex flex-col gap-4">
+-        <TextField label="SKU" value={sku} onChange={(e) => setSku(e.target.value)} />
+-        <TextField label="Variant name" value={name} onChange={(e) => setName(e.target.value)} />
+-        <TextField
+-          label="Reorder point"
+-          type="number"
+-          inputMode="numeric"
+-          value={reorderPoint}
+-          onChange={(e) => setReorderPoint(e.target.value)}
+-        />
+-        <ErrorAlert message={error} />
+-        <PendingButton type="submit" pending={pending} className={primaryButton}>
+-          Save
+-        </PendingButton>
+-      </form>
+-    </Dialog>
+-  );
+-}
+diff --git stg/apps/web/src/lib/inventory.ts stg2/apps/web/src/lib/inventory.ts
+index 25360a6..72a97e5 100644
+--- stg/apps/web/src/lib/inventory.ts
++++ stg2/apps/web/src/lib/inventory.ts
+@@ -3,26 +3,6 @@ import { queryOptions } from "@tanstack/react-query";
+ import { api } from "./api.ts";
+ import type { Role, User } from "./auth.ts";
+ 
+-export interface Variant {
+-  id: string;
+-  sku: string;
+-  name: string;
+-  reorderPoint: number;
+-  onHand: number;
+-  reserved: number;
+-  available: number;
+-}
+-
+-export interface StockLevel {
+-  warehouseId: string;
+-  warehouseCode: string;
+-  variantId: string;
+-  sku: string;
+-  onHand: number;
+-  reserved: number;
+-  available: number;
+-}
+-
+ export interface Product {
+   id: string;
+   sku: string;
+@@ -33,43 +13,13 @@ export interface Product {
+   reserved: number;
+   available: number;
+   createdAt: string;
+-  variants: Variant[];
+-  stock: StockLevel[];
+ }
+ 
+-export interface Warehouse {
+-  id: string;
+-  code: string;
+-  name: string;
+-}
+-
+-export interface Transfer {
+-  id: string;
+-  variantId: string;
+-  sku: string;
+-  fromWarehouseId: string;
+-  toWarehouseId: string;
+-  quantity: number;
+-  createdAt: string;
+-  createdBy: string;
+-}
+-
+-export type MovementType =
+-  | "receipt"
+-  | "issue"
+-  | "adjustment"
+-  | "shipment"
+-  | "transfer_in"
+-  | "transfer_out";
++export type MovementType = "receipt" | "issue" | "adjustment" | "shipment";
+ 
+ export interface Movement {
+   id: string;
+   productId: string;
+-  variantId: string;
+-  sku: string;
+-  warehouseId: string;
+-  warehouseCode: string;
+-  transferId: string | null;
+   type: MovementType;
+   quantity: number;
+   unitCostCents: number | null;
+@@ -86,18 +36,15 @@ export interface Order {
+   id: string;
+   customer: string;
+   status: OrderStatus;
+-  warehouseId: string;
+-  lines: { productId: string; variantId: string; sku: string; quantity: number }[];
++  lines: { productId: string; sku: string; quantity: number }[];
+   createdAt: string;
+   createdBy: string;
+ }
+ 
+ export interface LowStock {
+   productId: string;
+-  variantId: string;
+   sku: string;
+   name: string;
+-  variantName: string;
+   available: number;
+   reorderPoint: number;
+ }
+@@ -107,8 +54,6 @@ export const MOVEMENT_LABELS: Record<MovementType, string> = {
+   issue: "Issue",
+   adjustment: "Adjustment",
+   shipment: "Shipment",
+-  transfer_in: "Transfer in",
+-  transfer_out: "Transfer out",
+ };
+ 
+ export const STATUS_LABELS: Record<OrderStatus, string> = {
+@@ -151,30 +96,6 @@ export const lowStockQuery = queryOptions({
+   queryFn: () => api<LowStock[]>("/api/alerts/low-stock"),
+ });
+ 
+-export const warehousesQuery = queryOptions({
+-  queryKey: ["warehouses"],
+-  queryFn: () => api<Warehouse[]>("/api/warehouses"),
+-  staleTime: 30_000,
+-});
+-
+-export const transfersQuery = queryOptions({
+-  queryKey: ["transfers"],
+-  queryFn: () => api<Transfer[]>("/api/transfers"),
+-});
+-
+-/** Every variant of every product, labeled "SKU — Product (Variant)", for selects. */
+-export function variantOptions(products: Product[] | undefined) {
+-  return (products ?? []).flatMap((p) =>
+-    p.variants.map((v) => ({
+-      id: v.id,
+-      productId: p.id,
+-      sku: v.sku,
+-      available: v.available,
+-      label: `${v.sku} — ${p.name}${p.variants.length > 1 || v.name !== "Default" ? ` (${v.name})` : ""}`,
+-    })),
+-  );
+-}
+-
+ export const usersQuery = queryOptions({
+   queryKey: ["users"],
+   queryFn: () => api<User[]>("/api/users"),
+diff --git stg/apps/web/src/router.tsx stg2/apps/web/src/router.tsx
+index e295abf..5b62213 100644
+--- stg/apps/web/src/router.tsx
++++ stg2/apps/web/src/router.tsx
+@@ -12,16 +12,13 @@ import { meQuery, type User } from "./lib/auth.ts";
+ import { AlertsPage } from "./routes/alerts.tsx";
+ import { HomePage } from "./routes/home.tsx";
+ import { LoginPage } from "./routes/login.tsx";
+-import { OrderDetailPage } from "./routes/order-detail.tsx";
+ import { NewOrderPage } from "./routes/order-new.tsx";
++import { OrderDetailPage } from "./routes/order-detail.tsx";
+ import { OrdersPage } from "./routes/orders.tsx";
+ import { ProductDetailPage } from "./routes/product-detail.tsx";
+ import { ProductsPage } from "./routes/products.tsx";
+ import { RegisterPage } from "./routes/register.tsx";
+-import { ReportsPage } from "./routes/reports.tsx";
+-import { TransfersPage } from "./routes/transfers.tsx";
+ import { UsersPage } from "./routes/users.tsx";
+-import { WarehousesPage } from "./routes/warehouses.tsx";
+ 
+ interface RouterContext {
+   queryClient: QueryClient;
+@@ -108,26 +105,6 @@ const alertsRoute = createRoute({
+   component: AlertsPage,
+ });
+ 
+-const transfersRoute = createRoute({
+-  getParentRoute: () => authedRoute,
+-  path: "/transfers",
+-  component: TransfersPage,
+-});
+-
+-const warehousesRoute = createRoute({
+-  getParentRoute: () => authedRoute,
+-  path: "/warehouses",
+-  beforeLoad: adminOnly,
+-  component: WarehousesPage,
+-});
+-
+-const reportsRoute = createRoute({
+-  getParentRoute: () => authedRoute,
+-  path: "/reports",
+-  beforeLoad: adminOnly,
+-  component: ReportsPage,
+-});
+-
+ const usersRoute = createRoute({
+   getParentRoute: () => authedRoute,
+   path: "/users",
+@@ -146,9 +123,6 @@ const routeTree = rootRoute.addChildren([
+     orderNewRoute,
+     orderDetailRoute,
+     alertsRoute,
+-    transfersRoute,
+-    warehousesRoute,
+-    reportsRoute,
+     usersRoute,
+   ]),
+ ]);
+diff --git stg/apps/web/src/routes/alerts.tsx stg2/apps/web/src/routes/alerts.tsx
+index 38c4ef3..551bb8c 100644
+--- stg/apps/web/src/routes/alerts.tsx
++++ stg2/apps/web/src/routes/alerts.tsx
+@@ -18,11 +18,11 @@ export function AlertsPage() {
+         <ErrorAlert message={errorMessage(alerts.error)} />
+       ) : (
+         <DataTable
+-          headers={["SKU", "Name", "Variant", "Available", "Reorder point"]}
++          headers={["SKU", "Name", "Available", "Reorder point"]}
+           empty={alerts.data.length === 0 && <EmptyState>No low-stock products</EmptyState>}
+         >
+           {alerts.data.map((a) => (
+-            <tr key={a.variantId}>
++            <tr key={a.productId}>
+               <td className={cellClass}>
+                 <Link
+                   to="/products/$productId"
+@@ -33,7 +33,6 @@ export function AlertsPage() {
+                 </Link>
+               </td>
+               <td className={cellClass}>{a.name}</td>
+-              <td className={cellClass}>{a.variantName}</td>
+               <td className={`${cellClass} font-semibold text-red-700`}>{a.available}</td>
+               <td className={cellClass}>{a.reorderPoint}</td>
+             </tr>
+diff --git stg/apps/web/src/routes/order-detail.tsx stg2/apps/web/src/routes/order-detail.tsx
+index e0bf0ad..06752da 100644
+--- stg/apps/web/src/routes/order-detail.tsx
++++ stg2/apps/web/src/routes/order-detail.tsx
+@@ -47,11 +47,7 @@ export function OrderDetailPage() {
+             >
+               Ship order
+             </PendingButton>
+-            <button
+-              type="button"
+-              className={secondaryButton}
+-              onClick={() => setConfirmCancel(true)}
+-            >
++            <button type="button" className={secondaryButton} onClick={() => setConfirmCancel(true)}>
+               Cancel order
+             </button>
+           </>
+diff --git stg/apps/web/src/routes/order-new.tsx stg2/apps/web/src/routes/order-new.tsx
+index 3bdeee8..69b40ce 100644
+--- stg/apps/web/src/routes/order-new.tsx
++++ stg2/apps/web/src/routes/order-new.tsx
+@@ -10,11 +10,11 @@ import { SelectField } from "@/components/Select.tsx";
+ import { primaryButton, secondaryButton } from "@/components/ui.ts";
+ import { useAction } from "@/components/useAction.ts";
+ import { api } from "@/lib/api.ts";
+-import { productsQuery, variantOptions, warehousesQuery, type Order } from "@/lib/inventory.ts";
++import { productsQuery, type Order } from "@/lib/inventory.ts";
+ 
+ interface Line {
+   key: number;
+-  variantId: string;
++  productId: string;
+   quantity: string;
+ }
+ 
+@@ -22,13 +22,8 @@ export function NewOrderPage() {
+   const queryClient = useQueryClient();
+   const navigate = useNavigate();
+   const products = useQuery(productsQuery());
+-  const warehouses = useQuery(warehousesQuery);
+-  const [warehouseId, setWarehouseId] = useState("");
+-  const selectedWarehouse =
+-    warehouseId || warehouses.data?.find((w) => w.code === "MAIN")?.id || "";
+-  const options = variantOptions(products.data);
+   const [customer, setCustomer] = useState("");
+-  const [lines, setLines] = useState<Line[]>([{ key: 1, variantId: "", quantity: "1" }]);
++  const [lines, setLines] = useState<Line[]>([{ key: 1, productId: "", quantity: "1" }]);
+   const { pending, error, run } = useAction();
+ 
+   const update = (key: number, patch: Partial<Line>) =>
+@@ -41,9 +36,8 @@ export function NewOrderPage() {
+       created = await api<Order>("/api/orders", {
+         body: {
+           customer,
+-          ...(selectedWarehouse ? { warehouseId: selectedWarehouse } : {}),
+           lines: lines.map((l) => ({
+-            variantId: l.variantId,
++            productId: l.productId,
+             quantity: l.quantity.trim() === "" ? null : Number(l.quantity),
+           })),
+         },
+@@ -64,34 +58,19 @@ export function NewOrderPage() {
+         onSubmit={(e) => void submit(e)}
+         className="flex flex-col gap-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
+       >
+-        <TextField
+-          label="Customer"
+-          value={customer}
+-          onChange={(e) => setCustomer(e.target.value)}
+-        />
+-        <SelectField
+-          label="Warehouse"
+-          value={selectedWarehouse}
+-          onChange={(e) => setWarehouseId(e.target.value)}
+-        >
+-          {warehouses.data?.map((w) => (
+-            <option key={w.id} value={w.id}>
+-              {w.name}
+-            </option>
+-          ))}
+-        </SelectField>
++        <TextField label="Customer" value={customer} onChange={(e) => setCustomer(e.target.value)} />
+         {lines.map((line, index) => (
+           <fieldset key={line.key} className="grid gap-3 sm:grid-cols-[1fr_8rem_auto] sm:items-end">
+             <legend className="sr-only">Line {index + 1}</legend>
+             <SelectField
+               label={`Line ${index + 1} product`}
+-              value={line.variantId}
+-              onChange={(e) => update(line.key, { variantId: e.target.value })}
++              value={line.productId}
++              onChange={(e) => update(line.key, { productId: e.target.value })}
+             >
+               <option value="">Choose a product…</option>
+-              {options.map((o) => (
+-                <option key={o.id} value={o.id}>
+-                  {o.label}
++              {products.data?.map((p) => (
++                <option key={p.id} value={p.id}>
++                  {p.sku} — {p.name} ({p.available} available)
+                 </option>
+               ))}
+             </SelectField>
+@@ -120,7 +99,7 @@ export function NewOrderPage() {
+             onClick={() =>
+               setLines((all) => [
+                 ...all,
+-                { key: Math.max(...all.map((l) => l.key)) + 1, variantId: "", quantity: "1" },
++                { key: Math.max(...all.map((l) => l.key)) + 1, productId: "", quantity: "1" },
+               ])
+             }
+           >
+diff --git stg/apps/web/src/routes/orders.tsx stg2/apps/web/src/routes/orders.tsx
+index 17837cb..bc376c3 100644
+--- stg/apps/web/src/routes/orders.tsx
++++ stg2/apps/web/src/routes/orders.tsx
+@@ -38,9 +38,7 @@ export function OrdersPage() {
+                 </Link>
+               </td>
+               <td className={cellClass}>{STATUS_LABELS[o.status]}</td>
+-              <td className={cellClass}>
+-                {o.lines.map((l) => `${l.sku} × ${l.quantity}`).join(", ")}
+-              </td>
++              <td className={cellClass}>{o.lines.map((l) => `${l.sku} × ${l.quantity}`).join(", ")}</td>
+               <td className={cellClass}>{formatDateTime(o.createdAt)}</td>
+             </tr>
+           ))}
+diff --git stg/apps/web/src/routes/product-detail.tsx stg2/apps/web/src/routes/product-detail.tsx
+index 1709d98..83c17bf 100644
+--- stg/apps/web/src/routes/product-detail.tsx
++++ stg2/apps/web/src/routes/product-detail.tsx
+@@ -1,13 +1,10 @@
+ import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
+ import { useParams } from "@tanstack/react-router";
+-import { useState } from "react";
+ 
+ import { ErrorAlert } from "@/components/Alert.tsx";
+ import { MovementForm } from "@/components/MovementForm.tsx";
+ import { Card, Loading, PageHeader, Section } from "@/components/Page.tsx";
+ import { cellClass, DataTable, EmptyState } from "@/components/Table.tsx";
+-import { secondaryButton } from "@/components/ui.ts";
+-import { VariantDialog } from "@/components/VariantDialog.tsx";
+ import { errorMessage } from "@/lib/api.ts";
+ import { meQuery } from "@/lib/auth.ts";
+ import {
+@@ -16,7 +13,6 @@ import {
+   movementsQuery,
+   productQuery,
+   signed,
+-  warehousesQuery,
+ } from "@/lib/inventory.ts";
+ 
+ export function ProductDetailPage() {
+@@ -24,10 +20,6 @@ export function ProductDetailPage() {
+   const { data: user } = useSuspenseQuery(meQuery);
+   const product = useQuery(productQuery(productId));
+   const movements = useQuery(movementsQuery(productId));
+-  const warehouses = useQuery(warehousesQuery);
+-  const [addingVariant, setAddingVariant] = useState(false);
+-  const isAdmin = user?.role === "admin";
+-  const warehouseName = (id: string) => warehouses.data?.find((w) => w.id === id)?.name ?? id;
+ 
+   if (product.isPending) return <Loading />;
+   if (product.isError) return <ErrorAlert message={errorMessage(product.error)} />;
+@@ -53,49 +45,8 @@ export function ProductDetailPage() {
+         </Card>
+       </div>
+ 
+-      <Section title="Variants">
+-        {isAdmin && (
+-          <div className="mb-3">
+-            <button
+-              type="button"
+-              className={secondaryButton}
+-              onClick={() => setAddingVariant(true)}
+-            >
+-              Add variant
+-            </button>
+-          </div>
+-        )}
+-        <DataTable headers={["SKU", "Variant", "On hand", "Available"]}>
+-          {p.variants.map((v) => (
+-            <tr key={v.id}>
+-              <td className={`${cellClass} font-mono`}>{v.sku}</td>
+-              <td className={cellClass}>{v.name}</td>
+-              <td className={cellClass}>{v.onHand}</td>
+-              <td className={cellClass}>{v.available}</td>
+-            </tr>
+-          ))}
+-        </DataTable>
+-      </Section>
+-
+-      <Section title="Stock by warehouse">
+-        <DataTable
+-          headers={["Warehouse", "SKU", "On hand", "Reserved", "Available"]}
+-          empty={p.stock.length === 0 && <EmptyState>No stock in any warehouse</EmptyState>}
+-        >
+-          {p.stock.map((s) => (
+-            <tr key={`${s.variantId}-${s.warehouseId}`}>
+-              <td className={cellClass}>{warehouseName(s.warehouseId)}</td>
+-              <td className={`${cellClass} font-mono`}>{s.sku}</td>
+-              <td className={cellClass}>{s.onHand}</td>
+-              <td className={cellClass}>{s.reserved}</td>
+-              <td className={cellClass}>{s.available}</td>
+-            </tr>
+-          ))}
+-        </DataTable>
+-      </Section>
+-
+       <Section title="Record movement">
+-        <MovementForm key={p.variants.length} product={p} isAdmin={isAdmin} />
++        <MovementForm productId={p.id} isAdmin={user?.role === "admin"} />
+       </Section>
+ 
+       <Section title="History">
+@@ -105,15 +56,13 @@ export function ProductDetailPage() {
+           <ErrorAlert message={errorMessage(movements.error)} />
+         ) : (
+           <DataTable
+-            headers={["Date", "Type", "SKU", "Warehouse", "Quantity", "Balance", "User"]}
++            headers={["Date", "Type", "Quantity", "Balance", "User"]}
+             empty={movements.data.length === 0 && <EmptyState>No movements yet</EmptyState>}
+           >
+             {movements.data.map((m) => (
+               <tr key={m.id}>
+                 <td className={cellClass}>{formatDateTime(m.createdAt)}</td>
+                 <td className={cellClass}>{MOVEMENT_LABELS[m.type]}</td>
+-                <td className={`${cellClass} font-mono`}>{m.sku}</td>
+-                <td className={cellClass}>{warehouseName(m.warehouseId)}</td>
+                 <td className={cellClass}>{signed(m.quantity)}</td>
+                 <td className={cellClass}>{m.balanceAfter}</td>
+                 <td className={cellClass}>{m.userName}</td>
+@@ -122,7 +71,6 @@ export function ProductDetailPage() {
+           </DataTable>
+         )}
+       </Section>
+-      {addingVariant && <VariantDialog productId={p.id} onClose={() => setAddingVariant(false)} />}
+     </div>
+   );
+ }
+diff --git stg/apps/web/src/routes/products.tsx stg2/apps/web/src/routes/products.tsx
+index 9682e8c..af793cf 100644
+--- stg/apps/web/src/routes/products.tsx
++++ stg2/apps/web/src/routes/products.tsx
+@@ -30,11 +30,7 @@ export function ProductsPage() {
+     <div>
+       <PageHeader title="Products">
+         {isAdmin && (
+-          <button
+-            type="button"
+-            className={primaryButton}
+-            onClick={() => setDialog({ kind: "new" })}
+-          >
++          <button type="button" className={primaryButton} onClick={() => setDialog({ kind: "new" })}>
+             New product
+           </button>
+         )}
+diff --git stg/apps/web/src/routes/reports.tsx stg/apps/web/src/routes/reports.tsx
+deleted file mode 100644
+index 3796dcc..0000000
+--- stg/apps/web/src/routes/reports.tsx
++++ /dev/null
+@@ -1,178 +0,0 @@
+-import { queryOptions, useQuery } from "@tanstack/react-query";
+-import { useState } from "react";
+-
+-import { ErrorAlert } from "@/components/Alert.tsx";
+-import { TextField } from "@/components/Field.tsx";
+-import { Loading, PageHeader, Section } from "@/components/Page.tsx";
+-import { SelectField } from "@/components/Select.tsx";
+-import { cellClass, DataTable, EmptyState } from "@/components/Table.tsx";
+-import { secondaryButton } from "@/components/ui.ts";
+-import { api, errorMessage } from "@/lib/api.ts";
+-import { warehousesQuery } from "@/lib/inventory.ts";
+-
+-interface Valuation {
+-  totalValueCents: number;
+-  rows: {
+-    variantId: string;
+-    sku: string;
+-    productName: string;
+-    variantName: string;
+-    onHand: number;
+-    averageCostCents: number;
+-    valueCents: number;
+-  }[];
+-}
+-
+-interface MovementReport {
+-  rows: {
+-    variantId: string;
+-    sku: string;
+-    opening: number;
+-    received: number;
+-    shipped: number;
+-    adjusted: number;
+-    transferred: number;
+-    closing: number;
+-  }[];
+-}
+-
+-const usd = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+-export const formatMoney = (cents: number) => `$${usd.format(cents / 100)}`;
+-
+-const qs = (params: Record<string, string>) => {
+-  const p = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== ""));
+-  const s = p.toString();
+-  return s ? `?${s}` : "";
+-};
+-
+-const valuationQuery = (warehouseId: string) =>
+-  queryOptions({
+-    queryKey: ["reports", "valuation", warehouseId],
+-    queryFn: () => api<Valuation>(`/api/reports/valuation${qs({ warehouseId })}`),
+-  });
+-
+-const movementReportQuery = (from: string, to: string) =>
+-  queryOptions({
+-    queryKey: ["reports", "movements", from, to],
+-    queryFn: () => api<MovementReport>(`/api/reports/movements${qs({ from, to })}`),
+-    enabled: Boolean(from && to),
+-  });
+-
+-const today = () => new Date().toISOString().slice(0, 10);
+-
+-export function ReportsPage() {
+-  const warehouses = useQuery(warehousesQuery);
+-  const [warehouseId, setWarehouseId] = useState("");
+-  const [from, setFrom] = useState(today);
+-  const [to, setTo] = useState(today);
+-  const valuation = useQuery(valuationQuery(warehouseId));
+-  const period = useQuery(movementReportQuery(from, to));
+-
+-  return (
+-    <div>
+-      <PageHeader title="Reports" />
+-      <Section title="Inventory valuation">
+-        <div className="mb-4 flex flex-wrap items-end gap-4">
+-          <div className="w-full max-w-xs">
+-            <SelectField
+-              label="Warehouse"
+-              value={warehouseId}
+-              onChange={(e) => setWarehouseId(e.target.value)}
+-            >
+-              <option value="">All warehouses</option>
+-              {warehouses.data?.map((w) => (
+-                <option key={w.id} value={w.id}>
+-                  {w.name}
+-                </option>
+-              ))}
+-            </SelectField>
+-          </div>
+-          <a
+-            className={secondaryButton}
+-            href={`/api/reports/valuation.csv${qs({ warehouseId })}`}
+-            download
+-          >
+-            Export valuation CSV
+-          </a>
+-        </div>
+-        {valuation.isPending ? (
+-          <Loading />
+-        ) : valuation.isError ? (
+-          <ErrorAlert message={errorMessage(valuation.error)} />
+-        ) : (
+-          <>
+-            <p className="mb-3 text-lg font-semibold">
+-              Total value: {formatMoney(valuation.data.totalValueCents)}
+-            </p>
+-            <DataTable
+-              headers={["SKU", "Product", "Variant", "On hand", "Average cost", "Value"]}
+-              empty={valuation.data.rows.length === 0 && <EmptyState>No stock to value</EmptyState>}
+-            >
+-              {valuation.data.rows.map((r) => (
+-                <tr key={r.variantId}>
+-                  <td className={`${cellClass} font-mono`}>{r.sku}</td>
+-                  <td className={cellClass}>{r.productName}</td>
+-                  <td className={cellClass}>{r.variantName}</td>
+-                  <td className={cellClass}>{r.onHand}</td>
+-                  <td className={cellClass}>{formatMoney(r.averageCostCents)}</td>
+-                  <td className={cellClass}>{formatMoney(r.valueCents)}</td>
+-                </tr>
+-              ))}
+-            </DataTable>
+-          </>
+-        )}
+-      </Section>
+-
+-      <Section title="Movements by period">
+-        <div className="mb-4 flex flex-wrap items-end gap-4">
+-          <TextField
+-            label="From"
+-            type="date"
+-            value={from}
+-            onChange={(e) => setFrom(e.target.value)}
+-          />
+-          <TextField label="To" type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+-          <a
+-            className={secondaryButton}
+-            href={`/api/reports/movements.csv${qs({ from, to })}`}
+-            download
+-          >
+-            Export movements CSV
+-          </a>
+-        </div>
+-        {period.isPending ? (
+-          <Loading />
+-        ) : period.isError ? (
+-          <ErrorAlert message={errorMessage(period.error)} />
+-        ) : (
+-          <DataTable
+-            headers={[
+-              "SKU",
+-              "Opening",
+-              "Received",
+-              "Shipped",
+-              "Adjusted",
+-              "Transferred",
+-              "Closing",
+-            ]}
+-            empty={
+-              period.data.rows.length === 0 && <EmptyState>No data for this period</EmptyState>
+-            }
+-          >
+-            {period.data.rows.map((r) => (
+-              <tr key={r.variantId}>
+-                <td className={`${cellClass} font-mono`}>{r.sku}</td>
+-                <td className={cellClass}>{r.opening}</td>
+-                <td className={cellClass}>{r.received}</td>
+-                <td className={cellClass}>{r.shipped}</td>
+-                <td className={cellClass}>{r.adjusted}</td>
+-                <td className={cellClass}>{r.transferred}</td>
+-                <td className={cellClass}>{r.closing}</td>
+-              </tr>
+-            ))}
+-          </DataTable>
+-        )}
+-      </Section>
+-    </div>
+-  );
+-}
+diff --git stg/apps/web/src/routes/transfers.tsx stg/apps/web/src/routes/transfers.tsx
+deleted file mode 100644
+index 56d9333..0000000
+--- stg/apps/web/src/routes/transfers.tsx
++++ /dev/null
+@@ -1,133 +0,0 @@
+-import { useQuery, useQueryClient } from "@tanstack/react-query";
+-import { useState, type FormEvent } from "react";
+-
+-import { ErrorAlert, StatusMessage } from "@/components/Alert.tsx";
+-import { TextField } from "@/components/Field.tsx";
+-import { Loading, PageHeader, Section } from "@/components/Page.tsx";
+-import { PendingButton } from "@/components/PendingButton.tsx";
+-import { SelectField } from "@/components/Select.tsx";
+-import { cellClass, DataTable, EmptyState } from "@/components/Table.tsx";
+-import { primaryButton } from "@/components/ui.ts";
+-import { useAction } from "@/components/useAction.ts";
+-import { api, errorMessage } from "@/lib/api.ts";
+-import {
+-  formatDateTime,
+-  productsQuery,
+-  transfersQuery,
+-  variantOptions,
+-  warehousesQuery,
+-} from "@/lib/inventory.ts";
+-
+-export function TransfersPage() {
+-  const queryClient = useQueryClient();
+-  const products = useQuery(productsQuery());
+-  const warehouses = useQuery(warehousesQuery);
+-  const transfers = useQuery(transfersQuery);
+-  const [variantId, setVariantId] = useState("");
+-  const [from, setFrom] = useState("");
+-  const [to, setTo] = useState("");
+-  const [quantity, setQuantity] = useState("");
+-  const { pending, error, success, run } = useAction();
+-
+-  const options = variantOptions(products.data);
+-  const list = warehouses.data ?? [];
+-  const fromId = from || list[0]?.id || "";
+-  const toId = to || list.find((w) => w.id !== fromId)?.id || "";
+-  const name = (id: string) => list.find((w) => w.id === id)?.name ?? id;
+-  const sku = variantId || options[0]?.id || "";
+-
+-  const submit = async (event: FormEvent) => {
+-    event.preventDefault();
+-    const ok = await run(
+-      () =>
+-        api("/api/transfers", {
+-          body: {
+-            variantId: sku,
+-            fromWarehouseId: fromId,
+-            toWarehouseId: toId,
+-            quantity: quantity.trim() === "" ? null : Number(quantity),
+-          },
+-        }),
+-      "Transfer completed",
+-    );
+-    if (ok) {
+-      setQuantity("");
+-      await queryClient.invalidateQueries({ queryKey: ["transfers"] });
+-      await queryClient.invalidateQueries({ queryKey: ["products"] });
+-    }
+-  };
+-
+-  return (
+-    <div>
+-      <PageHeader title="Transfers" />
+-      <form
+-        noValidate
+-        onSubmit={(e) => void submit(e)}
+-        className="grid gap-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:grid-cols-2"
+-      >
+-        <SelectField label="Variant" value={sku} onChange={(e) => setVariantId(e.target.value)}>
+-          {options.map((o) => (
+-            <option key={o.id} value={o.id}>
+-              {o.label}
+-            </option>
+-          ))}
+-        </SelectField>
+-        <TextField
+-          label="Quantity"
+-          type="number"
+-          inputMode="numeric"
+-          value={quantity}
+-          onChange={(e) => setQuantity(e.target.value)}
+-        />
+-        <SelectField label="From" value={fromId} onChange={(e) => setFrom(e.target.value)}>
+-          {list.map((w) => (
+-            <option key={w.id} value={w.id}>
+-              {w.name}
+-            </option>
+-          ))}
+-        </SelectField>
+-        <SelectField label="To" value={toId} onChange={(e) => setTo(e.target.value)}>
+-          {list.map((w) => (
+-            <option key={w.id} value={w.id}>
+-              {w.name}
+-            </option>
+-          ))}
+-        </SelectField>
+-        <div className="flex flex-col gap-2 sm:col-span-2">
+-          <ErrorAlert message={error} />
+-          <StatusMessage message={success} />
+-          <PendingButton
+-            type="submit"
+-            pending={pending}
+-            className={`${primaryButton} sm:self-start`}
+-          >
+-            Transfer
+-          </PendingButton>
+-        </div>
+-      </form>
+-
+-      <Section title="Recent transfers">
+-        {transfers.isPending ? (
+-          <Loading />
+-        ) : transfers.isError ? (
+-          <ErrorAlert message={errorMessage(transfers.error)} />
+-        ) : (
+-          <DataTable
+-            headers={["Date", "SKU", "From", "To", "Quantity"]}
+-            empty={transfers.data.length === 0 && <EmptyState>No transfers yet</EmptyState>}
+-          >
+-            {transfers.data.map((t) => (
+-              <tr key={t.id}>
+-                <td className={cellClass}>{formatDateTime(t.createdAt)}</td>
+-                <td className={`${cellClass} font-mono`}>{t.sku}</td>
+-                <td className={cellClass}>{name(t.fromWarehouseId)}</td>
+-                <td className={cellClass}>{name(t.toWarehouseId)}</td>
+-                <td className={cellClass}>{t.quantity}</td>
+-              </tr>
+-            ))}
+-          </DataTable>
+-        )}
+-      </Section>
+-    </div>
+-  );
+-}
+diff --git stg/apps/web/src/routes/warehouses.tsx stg/apps/web/src/routes/warehouses.tsx
+deleted file mode 100644
+index d27fbe9..0000000
+--- stg/apps/web/src/routes/warehouses.tsx
++++ /dev/null
+@@ -1,70 +0,0 @@
+-import { useQuery, useQueryClient } from "@tanstack/react-query";
+-import { useState, type FormEvent } from "react";
+-
+-import { ErrorAlert } from "@/components/Alert.tsx";
+-import { Dialog } from "@/components/Dialog.tsx";
+-import { TextField } from "@/components/Field.tsx";
+-import { Loading, PageHeader } from "@/components/Page.tsx";
+-import { PendingButton } from "@/components/PendingButton.tsx";
+-import { cellClass, DataTable } from "@/components/Table.tsx";
+-import { primaryButton } from "@/components/ui.ts";
+-import { useAction } from "@/components/useAction.ts";
+-import { api, errorMessage } from "@/lib/api.ts";
+-import { warehousesQuery } from "@/lib/inventory.ts";
+-
+-function NewWarehouseDialog({ onClose }: { onClose: () => void }) {
+-  const queryClient = useQueryClient();
+-  const [code, setCode] = useState("");
+-  const [name, setName] = useState("");
+-  const { pending, error, run } = useAction();
+-
+-  const submit = async (event: FormEvent) => {
+-    event.preventDefault();
+-    if (await run(() => api("/api/warehouses", { body: { code, name } }))) {
+-      await queryClient.invalidateQueries({ queryKey: ["warehouses"] });
+-      onClose();
+-    }
+-  };
+-
+-  return (
+-    <Dialog title="New warehouse" onClose={onClose}>
+-      <form noValidate onSubmit={(e) => void submit(e)} className="flex flex-col gap-4">
+-        <TextField label="Code" value={code} onChange={(e) => setCode(e.target.value)} />
+-        <TextField label="Name" value={name} onChange={(e) => setName(e.target.value)} />
+-        <ErrorAlert message={error} />
+-        <PendingButton type="submit" pending={pending} className={primaryButton}>
+-          Save
+-        </PendingButton>
+-      </form>
+-    </Dialog>
+-  );
+-}
+-
+-export function WarehousesPage() {
+-  const warehouses = useQuery(warehousesQuery);
+-  const [creating, setCreating] = useState(false);
+-  return (
+-    <div>
+-      <PageHeader title="Warehouses">
+-        <button type="button" className={primaryButton} onClick={() => setCreating(true)}>
+-          New warehouse
+-        </button>
+-      </PageHeader>
+-      {warehouses.isPending ? (
+-        <Loading />
+-      ) : warehouses.isError ? (
+-        <ErrorAlert message={errorMessage(warehouses.error)} />
+-      ) : (
+-        <DataTable headers={["Code", "Name"]}>
+-          {warehouses.data.map((w) => (
+-            <tr key={w.id}>
+-              <td className={`${cellClass} font-mono`}>{w.code}</td>
+-              <td className={cellClass}>{w.name}</td>
+-            </tr>
+-          ))}
+-        </DataTable>
+-      )}
+-      {creating && <NewWarehouseDialog onClose={() => setCreating(false)} />}
+-    </div>
+-  );
+-}

@@ -1,0 +1,12 @@
+diff --git a/CTFd/api/v1/config.py b/CTFd/api/v1/config.py
+index 6401508a..03cabd82 100644
+--- a/CTFd/api/v1/config.py
++++ b/CTFd/api/v1/config.py
+@@ -103,7 +103,6 @@ class ConfigList(Resource):
+ 
+         return {"success": True, "data": response.data}
+ 
+-    @admins_only
+     @configs_namespace.doc(
+         description="Endpoint to get patch Config objects in bulk",
+         responses={200: ("Success", "APISimpleSuccessResponse")},

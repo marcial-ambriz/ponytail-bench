@@ -1,0 +1,26 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "options": { "typeAware": true },
+  "plugins": ["typescript", "oxc", "unicorn", "import", "promise", "vitest"],
+  "categories": { "correctness": "error", "suspicious": "warn", "perf": "warn" },
+  "rules": {
+    "typescript/no-floating-promises": "error",
+    "typescript/await-thenable": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/require-await": "warn",
+    "import/no-unassigned-import": [
+      "warn",
+      { "allow": ["**/*.css", "@testing-library/jest-dom/vitest"] }
+    ]
+  },
+  "ignorePatterns": ["**/dist/**", "**/coverage/**", "docs/**", "**/routeTree.gen.ts"],
+  "overrides": [
+    {
+      "files": ["**/*.test.{ts,tsx}"],
+      "rules": {
+        "typescript/require-await": "off"
+      }
+    },
+    { "files": ["apps/api/**"], "env": { "node": true } }
+  ]
+}

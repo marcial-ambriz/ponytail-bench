@@ -1,0 +1,42 @@
+diff --git a/apps/api/src/routes/products.ts b/apps/api/src/routes/products.ts
+index 1fb0cfe..c816df8 100644
+--- a/apps/api/src/routes/products.ts
++++ b/apps/api/src/routes/products.ts
+@@ -27,7 +27,7 @@ import {
+   unitCostSchema,
+   variantNameSchema,
+ } from "../domain/validation.js";
+-import { badRequest, conflict, forbidden, readJson } from "../http.js";
++import { badRequest, conflict, readJson } from "../http.js";
+ import type { Services } from "../services.js";
+ import { requireAdmin, type AppEnv } from "../session.js";
+ 
+@@ -214,9 +214,6 @@ export function productRoutes(services: Services) {
+     const product = loadProductRow(db, c.req.param("id"));
+     const body = await readJson(c, movementSchema);
+     const user = c.get("user");
+-    if (body.type === "adjustment" && user.role !== "admin") {
+-      throw forbidden("Only admins can record adjustments");
+-    }
+     let variantId = firstVariant(db, product.id).id;
+     if (body.variantId !== undefined) {
+       const variant = findVariant(db, body.variantId);
+diff --git a/apps/api/src/session.ts b/apps/api/src/session.ts
+index 53594a7..d186bb8 100644
+--- a/apps/api/src/session.ts
++++ b/apps/api/src/session.ts
+@@ -1,6 +1,6 @@
+ import { createMiddleware } from "hono/factory";
+ 
+-import { forbidden, unauthorized } from "./http.js";
++import { unauthorized } from "./http.js";
+ import type { Services } from "./services.js";
+ 
+ export type Role = "clerk" | "admin";
+@@ -31,6 +31,5 @@ export function requireSession(services: Services) {
+ }
+ 
+ export const requireAdmin = createMiddleware<AppEnv>(async (c, next) => {
+-  if (c.get("user").role !== "admin") throw forbidden();
+   await next();
+ });

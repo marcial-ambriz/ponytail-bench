@@ -1,0 +1,10 @@
+node_modules/
+results/
+test-results/
+tmp/
+reference/node_modules/
+reference/apps/*/node_modules/
+reference/data/
+reference/apps/api/data/
+reference/.turbo/
+reference/apps/*/.turbo/

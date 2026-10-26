@@ -1,0 +1,51 @@
+# Dependencies and virtualenvs
+node_modules/
+.venv/
+venv/
+.pnpm-store/
+
+# Runtime output
+results/
+tmp/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
+# Harness runtime state (the vendored skills and their hashes live in harness/skills/ and stay tracked)
+harness/.dryrun/
+harness/.state/
+harness/.runs/
+harness/.pilot/
+
+# Python / tooling caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.turbo/
+dist/
+.DS_Store
+
+# Databases
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Credentials (never commit; the harness reads them from BENCH_* environment variables only)
+.env
+.env.*
+!.env.example
+auth.json
+*.pem
+*.key
+*.p12
+*.pfx
+.netrc
+*credentials*
+*secret*
+.codegraph/

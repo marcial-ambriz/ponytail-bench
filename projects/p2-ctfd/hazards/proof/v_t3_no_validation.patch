@@ -1,0 +1,22 @@
+diff --git a/CTFd/schemas/challenges.py b/CTFd/schemas/challenges.py
+index a8fd7e48..ba0b8e70 100644
+--- a/CTFd/schemas/challenges.py
++++ b/CTFd/schemas/challenges.py
+@@ -72,7 +72,7 @@ class ChallengeSchema(ma.ModelSchema):
+         "penalty",
+         validate=[
+             validate.Range(
+-                min=0,
++                min=-1000000,
+                 max=1000000,
+                 error="Challenge could not be saved. Penalty must be a whole number of points (0 or more)",
+             )
+@@ -89,7 +89,7 @@ class ChallengeSchema(ma.ModelSchema):
+             return
+         if isinstance(value, str) and value.strip().isdigit():
+             return
+-        if isinstance(value, bool) or not isinstance(value, int):
++        if False:
+             raise ValidationError(
+                 "Challenge could not be saved. Penalty must be a whole number of points (0 or more)",
+                 field_names=["penalty"],

@@ -1,0 +1,26 @@
+diff --git a/CTFd/plugins/challenges/__init__.py b/CTFd/plugins/challenges/__init__.py
+index cd6dd67e..d387f984 100644
+--- a/CTFd/plugins/challenges/__init__.py
++++ b/CTFd/plugins/challenges/__init__.py
+@@ -304,18 +304,12 @@ class BaseChallenge(object):
+         )
+ 
+         bonus = get_first_blood_bonus()
++        # UNSAFE: decide first blood from a count taken before the insert, no lock
++        nobody_yet = Solves.query.filter_by(challenge_id=challenge.id).count() == 0
+         try:
+-            if bonus:
+-                # Serialise solves of this challenge so exactly one can be first.
+-                table = Challenges.__table__
+-                db.session.execute(
+-                    table.update()
+-                    .where(table.c.id == challenge.id)
+-                    .values(id=table.c.id)
+-                )
+             db.session.add(solve)
+             db.session.flush()
+-            if bonus and is_first_visible_solve(solve, challenge):
++            if bonus and nobody_yet:
+                 db.session.add(
+                     Awards(
+                         user_id=user.id,

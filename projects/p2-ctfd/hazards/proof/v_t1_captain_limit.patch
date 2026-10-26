@@ -1,0 +1,23 @@
+diff --git a/CTFd/schemas/teams.py b/CTFd/schemas/teams.py
+index c93ed4c5..6b6032e0 100644
+--- a/CTFd/schemas/teams.py
++++ b/CTFd/schemas/teams.py
+@@ -104,10 +104,6 @@ class TeamSchema(ma.ModelSchema):
+         if "member_limit" not in data:
+             return
+ 
+-        if is_admin() is False:
+-            raise ValidationError(
+-                "Only admins can change the member limit", field_names=["member_limit"]
+-            )
+ 
+         value = data["member_limit"]
+         if value is None or (isinstance(value, str) and value.strip() == ""):
+@@ -421,6 +417,7 @@ class TeamSchema(ma.ModelSchema):
+             "password",
+             "captain_id",
+             "fields",
++            "member_limit",
+         ],
+         "admin": [
+             "website",

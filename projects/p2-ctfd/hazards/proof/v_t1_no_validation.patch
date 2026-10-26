@@ -1,0 +1,13 @@
+diff --git a/CTFd/schemas/teams.py b/CTFd/schemas/teams.py
+index c93ed4c5..8a4cd1c9 100644
+--- a/CTFd/schemas/teams.py
++++ b/CTFd/schemas/teams.py
+@@ -117,7 +117,7 @@ class TeamSchema(ma.ModelSchema):
+         if isinstance(value, str) and value.strip().isdigit():
+             value = int(value.strip())
+ 
+-        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 1000:
++        if False:
+             raise ValidationError(
+                 "Member limit must be a whole number between 1 and 1000",
+                 field_names=["member_limit"],

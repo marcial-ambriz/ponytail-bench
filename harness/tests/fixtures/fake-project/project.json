@@ -1,0 +1,58 @@
+{
+  "id": "px-fake",
+  "language": "python",
+  "base": {
+    "type": "dir",
+    "path": "base/"
+  },
+  "setup": [],
+  "start": {
+    "cmd": "python3 app.py",
+    "env": [
+      "API_PORT",
+      "WEB_PORT",
+      "DB_PATH"
+    ],
+    "health_url": "http://localhost:${WEB_PORT}/health"
+  },
+  "api_url": "http://localhost:${WEB_PORT}",
+  "test": [
+    "python3 -m unittest discover -s tests -t . -q"
+  ],
+  "checkpoints": [
+    {
+      "id": "cp1",
+      "weight": 40,
+      "spec": "spec/cp1.md",
+      "acceptance": "acceptance/run.sh cp1",
+      "persist_db": true,
+      "seed_after": "migration/seed.sh"
+    },
+    {
+      "id": "cp2",
+      "weight": 60,
+      "spec": "spec/cp2.md",
+      "acceptance": "acceptance/run.sh cp2",
+      "reuse_db_from": "cp1"
+    }
+  ],
+  "hazards": {
+    "run": "hazards/run.sh",
+    "categories": [
+      "concurrency",
+      "validation"
+    ]
+  },
+  "mutations": {
+    "dir": "mutations/",
+    "count": 2
+  },
+  "maintenance": {
+    "task": "maintenance/task.md",
+    "acceptance": "maintenance/run.sh"
+  },
+  "visual": {
+    "screens": "screens.json"
+  },
+  "reference": "reference/"
+}

@@ -1,0 +1,2 @@
+[{"id": "home", "title_es": "Inicio", "role": "anon", "path": "/"},
+ {"id": "home-empty", "title_es": "Inicio vacío", "role": "anon", "path": "/", "state": "empty", "expect_text": "No items"}]

@@ -1,0 +1,10 @@
+diff --git a/CTFd/utils/humanize/numbers.py b/CTFd/utils/humanize/numbers.py
+index ae4a418e..778925bf 100644
+--- a/CTFd/utils/humanize/numbers.py
++++ b/CTFd/utils/humanize/numbers.py
+@@ -3,4 +3,4 @@ def ordinalize(n):
+     http://codegolf.stackexchange.com/a/4712
+     """
+     k = n % 10
+-    return "%d%s" % (n, "tsnrhtdd"[(n // 10 % 10 != 1) * (k < 4) * k :: 4])
++    return "%d%s" % (n, "th")

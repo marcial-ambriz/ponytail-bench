@@ -1,0 +1,51 @@
+{
+  "id": "p2-ctfd",
+  "language": "python",
+  "base": {
+    "type": "dir",
+    "path": "base/ctfd/",
+    "upstream": {
+      "repo": "https://github.com/CTFd/CTFd",
+      "tag": "3.8.9",
+      "commit": "5f345fbaa424e6a22b51addf7f27430927879ae2",
+      "license": "Apache-2.0"
+    },
+    "patches": ["base/planted.patch"],
+    "note": "base/ctfd/ = git archive of the pinned commit + base/planted.patch (bugs B1/B2, see base/README.md). Shipped as a dir so the run starts from a single commit with no upstream history (the history contains the upstream fix of B1)."
+  },
+  "setup": [
+    "test -x .venv/bin/python || uv venv -q --python 3.11 .venv",
+    "uv pip install -q --python .venv/bin/python -r development.txt"
+  ],
+  "start": {
+    "cmd": "rm -rf .data/filesystem_cache && DATABASE_URL=\"sqlite:///${DB_PATH}\" exec .venv/bin/python -m gunicorn 'CTFd:create_app()' --bind 127.0.0.1:${WEB_PORT} --worker-class gthread --workers 1 --threads 64 --timeout 120",
+    "env": ["WEB_PORT", "DB_PATH"],
+    "health_url": "http://127.0.0.1:${WEB_PORT}/",
+    "timeout_s": 180
+  },
+  "base_url": "http://127.0.0.1:${WEB_PORT}",
+  "api_url": "http://127.0.0.1:${WEB_PORT}/api/v1",
+  "lint": [".venv/bin/python -m compileall -q CTFd migrations"],
+  "test": [".venv/bin/python -m pytest -q -x -p no:randomly -p no:cacheprovider -n 4 -W ignore::DeprecationWarning tests"],
+  "checkpoints": [
+    {"id": "t1", "title": "Per-team member limits", "weight": 20, "spec": "spec/t1.md", "acceptance": "acceptance/run.sh t1"},
+    {"id": "t2", "title": "Double points bug", "weight": 20, "spec": "spec/t2.md", "acceptance": "acceptance/run.sh t2"},
+    {"id": "t3", "title": "Wrong-answer penalties", "weight": 20, "spec": "spec/t3.md", "acceptance": "acceptance/run.sh t3"},
+    {"id": "t4", "title": "Hidden team solve counts bug", "weight": 20, "spec": "spec/t4.md", "acceptance": "acceptance/run.sh t4"},
+    {"id": "t5", "title": "First-blood bonus", "weight": 20, "spec": "spec/t5.md", "acceptance": "acceptance/run.sh t5"}
+  ],
+  "hazards": {
+    "run": "hazards/run.sh",
+    "categories": ["concurrency", "idempotency", "authz", "validation", "data-loss", "regression"]
+  },
+  "mutations": {"dir": "mutations/", "count": 4},
+  "maintenance": {"task": "maintenance/task.md", "acceptance": "maintenance/run.sh", "regression_hazards": true},
+  "visual": {
+    "screens": "screens.json",
+    "seed": "seed/seed.py",
+    "auth": "visual/auth.mjs",
+    "anchors": "visual/anchors/"
+  },
+  "ux": {"tasks": "ux/tasks.md", "checkpoints": ["t3", "t5"]},
+  "reference": "reference/"
+}

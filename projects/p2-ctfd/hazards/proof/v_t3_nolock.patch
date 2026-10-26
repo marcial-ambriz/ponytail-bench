@@ -1,0 +1,22 @@
+diff --git a/CTFd/plugins/challenges/__init__.py b/CTFd/plugins/challenges/__init__.py
+index cd6dd67e..3165d1d1 100644
+--- a/CTFd/plugins/challenges/__init__.py
++++ b/CTFd/plugins/challenges/__init__.py
+@@ -359,7 +359,8 @@ class BaseChallenge(object):
+         if challenge.penalty:
+             # Lock the account first so the duplicate check, the score read and the
+             # deduction below cannot interleave with another wrong answer.
+-            lock_account_row(user=user, team=team)
++            # UNSAFE: no lock; score read before any write
++            score = get_uncached_account_score(user=user, team=team)
+             if team is not None:
+                 account_cond = Fails.team_id == team.id
+             else:
+@@ -374,7 +375,6 @@ class BaseChallenge(object):
+             )
+             db.session.add(wrong)
+             if not repeated:
+-                score = get_uncached_account_score(user=user, team=team)
+                 charge = min(int(challenge.penalty), max(score, 0))
+                 if charge > 0:
+                     db.session.add(

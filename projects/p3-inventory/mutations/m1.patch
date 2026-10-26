@@ -1,0 +1,17 @@
+diff --git a/apps/api/src/domain/inventory.ts b/apps/api/src/domain/inventory.ts
+index be66293..55c8b1d 100644
+--- a/apps/api/src/domain/inventory.ts
++++ b/apps/api/src/domain/inventory.ts
+@@ -333,11 +333,9 @@ export function applyMovement(db: DB, input: MovementInput): string {
+   let reserved = stock.reserved;
+   if (input.type === "shipment") {
+     reserved += input.quantity;
+-  } else if (input.quantity < 0 && -input.quantity > available) {
+-    throw conflict(`Insufficient stock: only ${available} of ${variant.sku} available`);
+   }
+   const onHand = stock.on_hand + input.quantity;
+-  if (onHand < 0 || reserved < 0 || reserved > onHand) throw conflict("Insufficient stock");
++  if (reserved < 0) throw conflict("Insufficient stock");
+   writeStock(db, input.variantId, input.warehouseId, { on_hand: onHand, reserved });
+   const id = randomUUID();
+   db.prepare(

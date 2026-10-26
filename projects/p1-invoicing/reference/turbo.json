@@ -1,0 +1,20 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "globalDependencies": [".oxlintrc.json"],
+  "globalPassThroughEnv": ["API_PORT", "WEB_PORT", "DB_PATH"],
+  "tasks": {
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "test": {
+      "outputs": []
+    },
+    "typecheck": {
+      "outputs": []
+    },
+    "build": {
+      "outputs": ["dist/**"]
+    }
+  }
+}

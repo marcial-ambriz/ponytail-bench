@@ -1,0 +1,12 @@
+diff --git a/apps/api/src/domain/money.ts b/apps/api/src/domain/money.ts
+--- a/apps/api/src/domain/money.ts
++++ b/apps/api/src/domain/money.ts
+@@ -21,7 +21,7 @@
+ ): LineAmounts {
+   const subtotalCents = line.quantity * line.unitPriceCents;
+   // subtotal <= 1e11 and rate <= 1e4, so the product stays far below 2^53.
+-  const taxCents = Math.floor((subtotalCents * line.taxRateBps + 5000) / 10_000);
++  const taxCents = Math.floor((subtotalCents * line.taxRateBps) / 10_000);
+   return { subtotalCents, taxCents, totalCents: subtotalCents + taxCents };
+ }
+ 

@@ -1,0 +1,436 @@
+[
+  {
+    "id": "login",
+    "title_es": "Inicio de sesión",
+    "role": "anon",
+    "cp": "cp1",
+    "path": "/login"
+  },
+  {
+    "id": "register",
+    "title_es": "Registro",
+    "role": "anon",
+    "cp": "cp1",
+    "path": "/register"
+  },
+  {
+    "id": "login-error",
+    "title_es": "Inicio de sesión con error",
+    "role": "anon",
+    "cp": "cp1",
+    "path": "/login",
+    "state": "error",
+    "expect_role": "alert",
+    "actions": [
+      {
+        "fill": [
+          "role=textbox[name=\"Email\"s]",
+          "owner@ledgerly.test"
+        ]
+      },
+      {
+        "fill": [
+          "input[type=password]",
+          "wrong-password"
+        ]
+      },
+      {
+        "click": "role=button[name=\"Sign in\"s]"
+      },
+      {
+        "wait": 1500
+      }
+    ]
+  },
+  {
+    "id": "organizations",
+    "title_es": "Mis organizaciones",
+    "role": "owner",
+    "cp": "cp1",
+    "path": "/",
+    "actions": [
+      {
+        "waitFor": "role=link[name=\"Northwind Supplies\"s]"
+      }
+    ]
+  },
+  {
+    "id": "organizations-empty",
+    "title_es": "Sin organizaciones (estado vacío)",
+    "role": "newcomer",
+    "cp": "cp1",
+    "path": "/",
+    "state": "empty",
+    "expect_text": "You are not a member of any organization yet"
+  },
+  {
+    "id": "members",
+    "title_es": "Miembros e invitaciones",
+    "role": "owner",
+    "cp": "cp1",
+    "path": "/",
+    "actions": [
+      {
+        "click": "role=link[name=\"Northwind Supplies\"s]"
+      },
+      {
+        "waitFor": "role=navigation[name=\"Organization\"s]"
+      },
+      {
+        "click": "role=navigation[name=\"Organization\"s] >> role=link[name=\"Members\"s]"
+      },
+      {
+        "waitFor": "role=columnheader[name=\"Email\"s]"
+      }
+    ]
+  },
+  {
+    "id": "members-readonly",
+    "title_es": "Miembros (solo lectura, viewer)",
+    "role": "viewer",
+    "cp": "cp1",
+    "path": "/",
+    "actions": [
+      {
+        "click": "role=link[name=\"Northwind Supplies\"s]"
+      },
+      {
+        "waitFor": "role=navigation[name=\"Organization\"s]"
+      },
+      {
+        "click": "role=navigation[name=\"Organization\"s] >> role=link[name=\"Members\"s]"
+      },
+      {
+        "waitFor": "role=columnheader[name=\"Email\"s]"
+      }
+    ]
+  },
+  {
+    "id": "customers",
+    "title_es": "Clientes",
+    "role": "accountant",
+    "cp": "cp2",
+    "path": "/",
+    "actions": [
+      {
+        "click": "role=link[name=\"Northwind Supplies\"s]"
+      },
+      {
+        "waitFor": "role=navigation[name=\"Organization\"s]"
+      },
+      {
+        "click": "role=navigation[name=\"Organization\"s] >> role=link[name=\"Customers\"s]"
+      },
+      {
+        "waitFor": "role=columnheader[name=\"Email\"s]"
+      }
+    ]
+  },
+  {
+    "id": "customers-empty",
+    "title_es": "Clientes (estado vacío)",
+    "role": "owner",
+    "cp": "cp2",
+    "path": "/",
+    "state": "empty",
+    "expect_text": "No customers yet",
+    "actions": [
+      {
+        "click": "role=link[name=\"Empty Co\"s]"
+      },
+      {
+        "waitFor": "role=navigation[name=\"Organization\"s]"
+      },
+      {
+        "click": "role=navigation[name=\"Organization\"s] >> role=link[name=\"Customers\"s]"
+      },
+      {
+        "wait": 1500
+      }
+    ]
+  },
+  {
+    "id": "customer-dialog",
+    "title_es": "Diálogo de nuevo cliente",
+    "role": "owner",
+    "cp": "cp2",
+    "path": "/",
+    "actions": [
+      {
+        "click": "role=link[name=\"Northwind Supplies\"s]"
+      },
+      {
+        "waitFor": "role=navigation[name=\"Organization\"s]"
+      },
+      {
+        "click": "role=navigation[name=\"Organization\"s] >> role=link[name=\"Customers\"s]"
+      },
+      {
+        "waitFor": "role=columnheader[name=\"Email\"s]"
+      },
+      {
+        "click": "role=button[name=\"New customer\"s]"
+      },
+      {
+        "waitFor": "role=dialog"
+      }
+    ]
+  },
+  {
+    "id": "invoices",
+    "title_es": "Facturas",
+    "role": "owner",
+    "cp": "cp2",
+    "path": "/",
+    "actions": [
+      {
+        "click": "role=link[name=\"Northwind Supplies\"s]"
+      },
+      {
+        "waitFor": "role=navigation[name=\"Organization\"s]"
+      },
+      {
+        "click": "role=navigation[name=\"Organization\"s] >> role=link[name=\"Invoices\"s]"
+      },
+      {
+        "waitFor": "role=columnheader[name=\"Balance\"s]"
+      }
+    ]
+  },
+  {
+    "id": "invoice-new",
+    "title_es": "Nueva factura",
+    "role": "owner",
+    "cp": "cp2",
+    "path": "/",
+    "actions": [
+      {
+        "click": "role=link[name=\"Northwind Supplies\"s]"
+      },
+      {
+        "waitFor": "role=navigation[name=\"Organization\"s]"
+      },
+      {
+        "click": "role=navigation[name=\"Organization\"s] >> role=link[name=\"Invoices\"s]"
+      },
+      {
+        "waitFor": "role=columnheader[name=\"Balance\"s]"
+      },
+      {
+        "click": "role=link[name=\"New invoice\"s]"
+      },
+      {
+        "waitFor": "role=button[name=\"Save draft\"s]"
+      },
+      {
+        "click": "role=button[name=\"Add line\"s]"
+      }
+    ]
+  },
+  {
+    "id": "invoice-draft",
+    "title_es": "Factura en borrador",
+    "role": "owner",
+    "cp": "cp2",
+    "path": "/",
+    "actions": [
+      {
+        "click": "role=link[name=\"Northwind Supplies\"s]"
+      },
+      {
+        "waitFor": "role=navigation[name=\"Organization\"s]"
+      },
+      {
+        "click": "role=navigation[name=\"Organization\"s] >> role=link[name=\"Invoices\"s]"
+      },
+      {
+        "waitFor": "role=columnheader[name=\"Balance\"s]"
+      },
+      {
+        "click": "role=link[name=\"Draft\"s]"
+      },
+      {
+        "waitFor": "text=Status: Draft"
+      }
+    ]
+  },
+  {
+    "id": "invoice-issued-viewer",
+    "title_es": "Factura emitida (viewer)",
+    "role": "viewer",
+    "cp": "cp2",
+    "path": "/",
+    "actions": [
+      {
+        "click": "role=link[name=\"Northwind Supplies\"s]"
+      },
+      {
+        "waitFor": "role=navigation[name=\"Organization\"s]"
+      },
+      {
+        "click": "role=navigation[name=\"Organization\"s] >> role=link[name=\"Invoices\"s]"
+      },
+      {
+        "waitFor": "role=columnheader[name=\"Balance\"s]"
+      },
+      {
+        "click": "role=link[name=\"INV-0003\"s]"
+      },
+      {
+        "waitFor": "text=Status:"
+      }
+    ]
+  },
+  {
+    "id": "invoice-payments",
+    "title_es": "Factura con pagos y reembolso",
+    "role": "owner",
+    "cp": "cp3",
+    "path": "/",
+    "actions": [
+      {
+        "click": "role=link[name=\"Northwind Supplies\"s]"
+      },
+      {
+        "waitFor": "role=navigation[name=\"Organization\"s]"
+      },
+      {
+        "click": "role=navigation[name=\"Organization\"s] >> role=link[name=\"Invoices\"s]"
+      },
+      {
+        "waitFor": "role=columnheader[name=\"Balance\"s]"
+      },
+      {
+        "click": "role=link[name=\"INV-0002\"s]"
+      },
+      {
+        "waitFor": "role=heading[name=\"Payments\"s]"
+      }
+    ]
+  },
+  {
+    "id": "payment-error",
+    "title_es": "Pago rechazado (error)",
+    "role": "owner",
+    "cp": "cp3",
+    "path": "/",
+    "state": "error",
+    "expect_role": "alert",
+    "actions": [
+      {
+        "click": "role=link[name=\"Northwind Supplies\"s]"
+      },
+      {
+        "waitFor": "role=navigation[name=\"Organization\"s]"
+      },
+      {
+        "click": "role=navigation[name=\"Organization\"s] >> role=link[name=\"Invoices\"s]"
+      },
+      {
+        "waitFor": "role=columnheader[name=\"Balance\"s]"
+      },
+      {
+        "click": "role=link[name=\"INV-0005\"s]"
+      },
+      {
+        "click": "role=button[name=\"Record payment\"s]"
+      },
+      {
+        "fill": [
+          "role=dialog >> role=textbox[name=\"Amount\"s]",
+          "999999"
+        ]
+      },
+      {
+        "click": "role=dialog >> role=button[name=\"Save payment\"s]"
+      },
+      {
+        "wait": 1500
+      }
+    ]
+  },
+  {
+    "id": "settings",
+    "title_es": "Configuración del webhook",
+    "role": "owner",
+    "cp": "cp3",
+    "path": "/",
+    "actions": [
+      {
+        "click": "role=link[name=\"Northwind Supplies\"s]"
+      },
+      {
+        "waitFor": "role=navigation[name=\"Organization\"s]"
+      },
+      {
+        "click": "role=navigation[name=\"Organization\"s] >> role=link[name=\"Settings\"s]"
+      },
+      {
+        "waitFor": "role=heading[name=\"Webhook\"s]"
+      }
+    ]
+  },
+  {
+    "id": "import",
+    "title_es": "Importación CSV",
+    "role": "accountant",
+    "cp": "cp4",
+    "path": "/",
+    "actions": [
+      {
+        "click": "role=link[name=\"Northwind Supplies\"s]"
+      },
+      {
+        "waitFor": "role=navigation[name=\"Organization\"s]"
+      },
+      {
+        "click": "role=navigation[name=\"Organization\"s] >> role=link[name=\"Import\"s]"
+      },
+      {
+        "waitFor": "role=heading[name=\"Import customers\"s]"
+      }
+    ]
+  },
+  {
+    "id": "audit",
+    "title_es": "Bitácora de auditoría",
+    "role": "owner",
+    "cp": "cp4",
+    "path": "/",
+    "actions": [
+      {
+        "click": "role=link[name=\"Northwind Supplies\"s]"
+      },
+      {
+        "waitFor": "role=navigation[name=\"Organization\"s]"
+      },
+      {
+        "click": "role=navigation[name=\"Organization\"s] >> role=link[name=\"Audit log\"s]"
+      },
+      {
+        "waitFor": "role=columnheader[name=\"Action\"s]"
+      }
+    ]
+  },
+  {
+    "id": "dashboard",
+    "title_es": "Panel: cartera por antigüedad",
+    "role": "owner",
+    "cp": "cp5",
+    "path": "/",
+    "actions": [
+      {
+        "click": "role=link[name=\"Northwind Supplies\"s]"
+      },
+      {
+        "waitFor": "role=navigation[name=\"Organization\"s]"
+      },
+      {
+        "click": "role=navigation[name=\"Organization\"s] >> role=link[name=\"Dashboard\"s]"
+      },
+      {
+        "waitFor": "role=columnheader[name=\"Bucket\"s]"
+      }
+    ]
+  }
+]

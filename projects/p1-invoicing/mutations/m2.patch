@@ -1,0 +1,25 @@
+diff --git a/apps/api/src/routes/webhooks.ts b/apps/api/src/routes/webhooks.ts
+--- a/apps/api/src/routes/webhooks.ts
++++ b/apps/api/src/routes/webhooks.ts
+@@ -90,11 +90,7 @@
+           "SELECT payload FROM webhook_event WHERE org_id = ? AND event_id = ?",
+         )
+         .get(orgId, event.id);
+-      if (seen) {
+-        if (seen.payload !== fingerprint(event))
+-          throw conflict("Event id already used with different content");
+-        return;
+-      }
++      void seen;
+ 
+       const { paymentId } = event.data;
+       if (event.type === "payment.succeeded") {
+@@ -137,7 +133,7 @@
+       }
+ 
+       db.prepare(
+-        "INSERT INTO webhook_event (org_id, event_id, type, payload, payment_id, received_at) VALUES (?, ?, ?, ?, ?, ?)",
++        "INSERT OR IGNORE INTO webhook_event (org_id, event_id, type, payload, payment_id, received_at) VALUES (?, ?, ?, ?, ?, ?)",
+       ).run(orgId, event.id, event.type, fingerprint(event), paymentId, now.toISOString());
+     })();
+ 

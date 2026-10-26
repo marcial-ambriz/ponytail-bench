@@ -1,0 +1,22 @@
+diff --git a/apps/api/src/routes/products.ts b/apps/api/src/routes/products.ts
+index 1fb0cfe..3773f18 100644
+--- a/apps/api/src/routes/products.ts
++++ b/apps/api/src/routes/products.ts
+@@ -200,6 +200,17 @@ export function productRoutes(services: Services) {
+     return c.json(variantView(db, id), 201);
+   });
+ 
++  app.delete("/:id/movements/:movementId", requireAdmin, (c) => {
++    const m = loadMovement(db, c.req.param("movementId"));
++    db.prepare("UPDATE stock SET on_hand = on_hand - ? WHERE variant_id = ? AND warehouse_id = ?").run(
++      m.quantity,
++      m.variantId,
++      m.warehouseId,
++    );
++    db.prepare("DELETE FROM movement WHERE id = ?").run(m.id);
++    return c.json({ ok: true });
++  });
++
+   app.get("/:id/movements", (c) => {
+     const product = loadProductRow(db, c.req.param("id"));
+     return c.json(

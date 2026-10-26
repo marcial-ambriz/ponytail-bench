@@ -1,0 +1,13 @@
+diff --git a/logic.py b/logic.py
+index a4289f6..a6d9a61 100644
+--- a/logic.py
++++ b/logic.py
+@@ -22,8 +22,6 @@ def take(db, item_id, qty):
+         row = db.execute("SELECT qty FROM items WHERE id = ?", (item_id,)).fetchone()
+         if row is None:
+             return 404
+-        if row[0] < qty:
+-            return 409
+         db.execute("UPDATE items SET qty = qty - ? WHERE id = ?", (qty, item_id))
+         return 200
+     finally:

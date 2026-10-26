@@ -1,0 +1,13 @@
+diff --git a/apps/api/src/routes/alerts.ts b/apps/api/src/routes/alerts.ts
+index c167cd6..8c104c5 100644
+--- a/apps/api/src/routes/alerts.ts
++++ b/apps/api/src/routes/alerts.ts
+@@ -20,7 +20,7 @@ export function alertRoutes(services: Services) {
+         }
+       >(
+         `SELECT v.product_id, v.id AS variant_id, v.sku, p.name, v.name AS variant_name, v.reorder_point,
+-                COALESCE(SUM(s.on_hand - s.reserved), 0) AS available
++                COALESCE(SUM(s.on_hand), 0) AS available
+          FROM variant v JOIN product p ON p.id = v.product_id LEFT JOIN stock s ON s.variant_id = v.id
+          WHERE v.reorder_point > 0
+          GROUP BY v.id

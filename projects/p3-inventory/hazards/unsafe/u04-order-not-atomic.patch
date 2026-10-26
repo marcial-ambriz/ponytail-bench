@@ -1,0 +1,22 @@
+diff --git a/apps/api/src/routes/orders.ts b/apps/api/src/routes/orders.ts
+index 76e25dd..070fbc1 100644
+--- a/apps/api/src/routes/orders.ts
++++ b/apps/api/src/routes/orders.ts
+@@ -146,7 +146,7 @@ export function orderRoutes(services: Services) {
+     }
+     const id = randomUUID();
+     const at = services.now().toISOString();
+-    db.transaction(() => {
++    (() => {
+       db.prepare(
+         "INSERT INTO sales_order (id, customer, status, warehouse_id, created_by, created_at, updated_at) VALUES (?, ?, 'reserved', ?, ?, ?, ?)",
+       ).run(id, body.customer, warehouse.id, c.get("user").id, at, at);
+@@ -156,7 +156,7 @@ export function orderRoutes(services: Services) {
+           "INSERT INTO order_line (order_id, line_no, product_id, variant_id, quantity) VALUES (?, ?, ?, ?, ?)",
+         ).run(id, index + 1, line.productId, line.variantId, line.quantity);
+       });
+-    }).immediate();
++    })();
+     return c.json(loadOrder(db, id), 201);
+   });
+ 

@@ -1,0 +1,346 @@
+[
+  {
+    "id": "login",
+    "title_es": "Inicio de sesión",
+    "role": "anon",
+    "cp": "cp1",
+    "path": "/login"
+  },
+  {
+    "id": "register",
+    "title_es": "Registro",
+    "role": "anon",
+    "cp": "cp1",
+    "path": "/register"
+  },
+  {
+    "id": "login-error",
+    "title_es": "Inicio de sesión con error",
+    "role": "anon",
+    "cp": "cp1",
+    "path": "/login",
+    "state": "error",
+    "expect_role": "alert",
+    "actions": [
+      {
+        "fill": [
+          "internal:label=\"Email\"s",
+          "admin@stockly.test"
+        ]
+      },
+      {
+        "fill": [
+          "input[type=password]",
+          "wrong-password"
+        ]
+      },
+      {
+        "click": "role=button[name=\"Sign in\"s]"
+      },
+      {
+        "wait": 1500
+      }
+    ]
+  },
+  {
+    "id": "home",
+    "title_es": "Inicio",
+    "role": "clerk",
+    "cp": "cp1",
+    "path": "/"
+  },
+  {
+    "id": "products",
+    "title_es": "Catálogo de productos",
+    "role": "admin",
+    "cp": "cp1",
+    "path": "/products",
+    "actions": [
+      {
+        "waitFor": "role=link[name=\"HW-BOLT\"s]"
+      }
+    ]
+  },
+  {
+    "id": "products-empty",
+    "title_es": "Catálogo sin resultados (estado vacío)",
+    "role": "clerk",
+    "cp": "cp1",
+    "path": "/products",
+    "state": "empty",
+    "expect_text": "No products found",
+    "actions": [
+      {
+        "fill": [
+          "internal:label=\"Search\"s",
+          "zz-no-such-product"
+        ]
+      },
+      {
+        "wait": 1000
+      }
+    ]
+  },
+  {
+    "id": "product-dialog",
+    "title_es": "Diálogo de nuevo producto",
+    "role": "admin",
+    "cp": "cp1",
+    "path": "/products",
+    "actions": [
+      {
+        "click": "role=button[name=\"New product\"s]"
+      },
+      {
+        "waitFor": "role=dialog"
+      }
+    ]
+  },
+  {
+    "id": "product-dialog-error",
+    "title_es": "Diálogo de producto con error",
+    "role": "admin",
+    "cp": "cp1",
+    "path": "/products",
+    "state": "error",
+    "expect_role": "alert",
+    "actions": [
+      {
+        "click": "role=button[name=\"New product\"s]"
+      },
+      {
+        "fill": [
+          "role=dialog >> internal:label=\"SKU\"s",
+          "HW-BOLT"
+        ]
+      },
+      {
+        "fill": [
+          "role=dialog >> internal:label=\"Name\"s",
+          "Duplicate bolt"
+        ]
+      },
+      {
+        "click": "role=dialog >> role=button[name=\"Save\"s]"
+      },
+      {
+        "wait": 1500
+      }
+    ]
+  },
+  {
+    "id": "users",
+    "title_es": "Usuarios y roles",
+    "role": "admin",
+    "cp": "cp1",
+    "path": "/users"
+  },
+  {
+    "id": "product-detail",
+    "title_es": "Detalle de producto con historial",
+    "role": "admin",
+    "cp": "cp1",
+    "path": "/products",
+    "actions": [
+      {
+        "click": "role=link[name=\"HW-BOLT\"s]"
+      },
+      {
+        "wait": 1500
+      }
+    ]
+  },
+  {
+    "id": "product-no-movements",
+    "title_es": "Producto sin movimientos (estado vacío)",
+    "role": "clerk",
+    "cp": "cp2",
+    "path": "/products",
+    "state": "empty",
+    "expect_text": "No movements yet",
+    "actions": [
+      {
+        "click": "role=link[name=\"HW-LBL\"s]"
+      },
+      {
+        "wait": 1500
+      }
+    ]
+  },
+  {
+    "id": "movement-error",
+    "title_es": "Movimiento rechazado (cantidad inválida)",
+    "role": "clerk",
+    "cp": "cp2",
+    "path": "/products",
+    "state": "error",
+    "expect_role": "alert",
+    "actions": [
+      {
+        "click": "role=link[name=\"HW-TIE\"s]"
+      },
+      {
+        "waitFor": "role=button[name=\"Record\"s]"
+      },
+      {
+        "fill": [
+          "internal:label=\"Quantity\"s",
+          "0"
+        ]
+      },
+      {
+        "click": "role=button[name=\"Record\"s]"
+      },
+      {
+        "wait": 1500
+      }
+    ]
+  },
+  {
+    "id": "orders",
+    "title_es": "Pedidos",
+    "role": "clerk",
+    "cp": "cp3",
+    "path": "/orders"
+  },
+  {
+    "id": "order-new",
+    "title_es": "Nuevo pedido",
+    "role": "clerk",
+    "cp": "cp3",
+    "path": "/orders/new"
+  },
+  {
+    "id": "order-error",
+    "title_es": "Pedido rechazado",
+    "role": "clerk",
+    "cp": "cp3",
+    "path": "/orders/new",
+    "state": "error",
+    "expect_role": "alert",
+    "actions": [
+      {
+        "fill": [
+          "internal:label=\"Customer\"s",
+          "Test customer"
+        ]
+      },
+      {
+        "click": "role=button[name=\"Place order\"s]"
+      },
+      {
+        "wait": 1500
+      }
+    ]
+  },
+  {
+    "id": "order-detail",
+    "title_es": "Detalle de pedido",
+    "role": "admin",
+    "cp": "cp3",
+    "path": "/orders",
+    "actions": [
+      {
+        "click": "role=link[name=/^Northwind/]"
+      },
+      {
+        "wait": 1500
+      }
+    ]
+  },
+  {
+    "id": "alerts",
+    "title_es": "Alertas de stock bajo",
+    "role": "clerk",
+    "cp": "cp3",
+    "path": "/alerts"
+  },
+  {
+    "id": "warehouses",
+    "title_es": "Almacenes",
+    "role": "admin",
+    "cp": "cp4",
+    "path": "/warehouses"
+  },
+  {
+    "id": "transfers",
+    "title_es": "Transferencias entre almacenes",
+    "role": "clerk",
+    "cp": "cp4",
+    "path": "/transfers"
+  },
+  {
+    "id": "transfer-error",
+    "title_es": "Transferencia rechazada",
+    "role": "clerk",
+    "cp": "cp4",
+    "path": "/transfers",
+    "state": "error",
+    "expect_role": "alert",
+    "actions": [
+      {
+        "fill": [
+          "internal:label=\"Quantity\"s",
+          "999999"
+        ]
+      },
+      {
+        "click": "role=button[name=\"Transfer\"s]"
+      },
+      {
+        "wait": 1500
+      }
+    ]
+  },
+  {
+    "id": "variant-dialog",
+    "title_es": "Diálogo de nueva variante",
+    "role": "admin",
+    "cp": "cp4",
+    "path": "/products",
+    "actions": [
+      {
+        "click": "role=link[name=\"HW-BOLT\"s]"
+      },
+      {
+        "click": "role=button[name=\"Add variant\"s]"
+      },
+      {
+        "waitFor": "role=dialog"
+      }
+    ]
+  },
+  {
+    "id": "reports",
+    "title_es": "Reportes: valuación y movimientos",
+    "role": "admin",
+    "cp": "cp5",
+    "path": "/reports"
+  },
+  {
+    "id": "reports-empty",
+    "title_es": "Movimientos por periodo sin datos (estado vacío)",
+    "role": "admin",
+    "cp": "cp5",
+    "path": "/reports",
+    "state": "empty",
+    "expect_text": "No data for this period",
+    "actions": [
+      {
+        "fill": [
+          "internal:label=\"From\"s >> nth=0",
+          "2000-01-01"
+        ]
+      },
+      {
+        "fill": [
+          "internal:label=\"To\"s >> nth=0",
+          "2000-01-31"
+        ]
+      },
+      {
+        "wait": 1500
+      }
+    ]
+  }
+]

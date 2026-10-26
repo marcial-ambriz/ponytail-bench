@@ -1,0 +1,23 @@
+[
+  {"id": "login", "cp": "t1", "title_es": "Inicio de sesión", "role": "anon", "path": "/login"},
+  {"id": "challenges", "cp": "t1", "title_es": "Tablero de retos", "role": "member", "path": "/challenges"},
+  {"id": "scoreboard", "cp": "t1", "title_es": "Marcador", "role": "anon", "path": "/scoreboard"},
+  {"id": "team-public", "cp": "t1", "title_es": "Página pública del equipo (cupos 3 / 4)", "role": "anon", "path": "/teams/1"},
+  {"id": "team-own", "cp": "t1", "title_es": "Mi equipo (cupos)", "role": "member", "path": "/team"},
+  {"id": "team-join-error", "cp": "t1", "title_es": "Unirse a un equipo: contraseña incorrecta", "role": "loner",
+   "path": "/teams/join", "state": "error", "expect_text": "That information is incorrect",
+   "actions": [{"fill": ["input[name=name]", "NullPointers"]}, {"fill": ["input[name=password]", "wrong"]},
+               {"click": "form [type=submit]"}, {"wait": 800}]},
+  {"id": "admin-team", "cp": "t1", "title_es": "Admin: editar equipo (límite de miembros)", "role": "admin",
+   "path": "/admin/teams/1", "actions": [{"click": ".edit-team"}, {"wait": 600}]},
+  {"id": "challenge-window", "cp": "t3", "title_es": "Ventana del reto con aviso de penalización", "role": "member",
+   "path": "/challenges#Baby%20RSA-2", "actions": [{"wait": 1500}]},
+  {"id": "challenge-wrong", "cp": "t3", "title_es": "Respuesta incorrecta en reto con penalización", "role": "member",
+   "path": "/challenges#Baby%20RSA-2", "state": "error", "expect_text": "Incorrect",
+   "actions": [{"wait": 1500}, {"fill": ["#challenge-input", "flag{nope}"]}, {"click": "#challenge-submit"}, {"wait": 1000}]},
+  {"id": "admin-challenge", "cp": "t3", "title_es": "Admin: editar reto (penalización)", "role": "admin", "path": "/admin/challenges/2"},
+  {"id": "challenges-counts", "cp": "t4", "title_es": "Tablero con conteo de resoluciones (sin equipo oculto)", "role": "member", "path": "/challenges"},
+  {"id": "admin-config", "cp": "t5", "title_es": "Admin: configuración (bono de primera sangre)", "role": "admin",
+   "path": "/admin/config", "actions": [{"click": "a[href='#accounts']"}, {"wait": 500}]},
+  {"id": "team-awards", "cp": "t5", "title_es": "Equipo con primera sangre y penalizaciones", "role": "anon", "path": "/teams/1"}
+]

@@ -1,0 +1,542 @@
+diff --git a/apps/api/src/app.ts b/apps/api/src/app.ts
+index 9eae6c9..ccf7033 100644
+--- a/apps/api/src/app.ts
++++ b/apps/api/src/app.ts
+@@ -2,6 +2,7 @@ import { Hono } from "hono";
+ 
+ import { HttpError } from "./http.js";
+ import { alertRoutes } from "./routes/alerts.js";
++import { cycleCountRoutes } from "./routes/cycle-counts.js";
+ import { meRoutes } from "./routes/me.js";
+ import { orderRoutes } from "./routes/orders.js";
+ import { productRoutes } from "./routes/products.js";
+@@ -36,6 +37,7 @@ export function createApp(services: Services) {
+   api.route("/warehouses", warehouseRoutes(services));
+   api.route("/transfers", transferRoutes(services));
+   api.route("/reports", reportRoutes(services));
++  api.route("/cycle-counts", cycleCountRoutes(services));
+   app.route("/api", api);
+ 
+   app.notFound((c) => c.json({ error: "Not found" }, 404));
+diff --git a/apps/api/src/db.ts b/apps/api/src/db.ts
+index 1f3b960..1b5b8b8 100644
+--- a/apps/api/src/db.ts
++++ b/apps/api/src/db.ts
+@@ -206,6 +206,31 @@ function migrateV4(db: DB): void {
+   `);
+ }
+ 
++/**
++ * Creates or upgrades the application tables (better-auth owns `user`, `session`, `account`, `verification`).
++ * `PRAGMA user_version` records the schema version; each step runs once, inside one transaction, with foreign keys
++ * checked at the end (table rebuilds need them off while tables are swapped).
++ */
++const SCHEMA_V5 = `
++  CREATE TABLE cycle_count (
++    id TEXT PRIMARY KEY,
++    warehouse_id TEXT NOT NULL REFERENCES warehouse(id),
++    status TEXT NOT NULL CHECK (status IN ('open', 'posted', 'cancelled')),
++    created_by TEXT NOT NULL REFERENCES user(id),
++    created_at TEXT NOT NULL,
++    posted_at TEXT
++  );
++  CREATE UNIQUE INDEX cycle_count_one_open ON cycle_count (warehouse_id) WHERE status = 'open';
++
++  CREATE TABLE cycle_count_line (
++    count_id TEXT NOT NULL REFERENCES cycle_count(id),
++    variant_id TEXT NOT NULL REFERENCES variant(id),
++    expected INTEGER NOT NULL,
++    counted INTEGER CHECK (counted IS NULL OR counted >= 0),
++    PRIMARY KEY (count_id, variant_id)
++  );
++`;
++
+ /**
+  * Creates or upgrades the application tables (better-auth owns `user`, `session`, `account`, `verification`).
+  * `PRAGMA user_version` records the schema version; each step runs once, inside one transaction, with foreign keys
+@@ -213,17 +238,18 @@ function migrateV4(db: DB): void {
+  */
+ export function migrateAppSchema(db: DB): void {
+   const version = Number(db.pragma("user_version", { simple: true }));
+-  if (version >= 4) return;
++  if (version >= 5) return;
+   db.pragma("foreign_keys = OFF");
+   try {
+     db.transaction(() => {
+       if (version < 3) db.exec(SCHEMA_V3);
+-      migrateV4(db);
++      if (version < 4) migrateV4(db);
++      db.exec(SCHEMA_V5);
+       const broken = db.pragma("foreign_key_check");
+       if (Array.isArray(broken) && broken.length > 0) {
+         throw new Error(`migration left ${broken.length} broken references`);
+       }
+-      db.pragma("user_version = 4");
++      db.pragma("user_version = 5");
+     }).immediate();
+   } finally {
+     db.pragma("foreign_keys = ON");
+diff --git a/apps/api/src/domain/inventory.ts b/apps/api/src/domain/inventory.ts
+index be66293..32de29e 100644
+--- a/apps/api/src/domain/inventory.ts
++++ b/apps/api/src/domain/inventory.ts
+@@ -210,7 +210,7 @@ interface StockRow {
+   reserved: number;
+ }
+ 
+-function stockRow(db: DB, variantId: string, warehouseId: string): StockRow {
++export function stockRow(db: DB, variantId: string, warehouseId: string): StockRow {
+   return (
+     db
+       .prepare<[string, string], StockRow>(
+diff --git a/apps/api/src/migration.test.ts b/apps/api/src/migration.test.ts
+index 8122b65..3c47d1f 100644
+--- a/apps/api/src/migration.test.ts
++++ b/apps/api/src/migration.test.ts
+@@ -27,7 +27,7 @@ describe("v3 -> v4 migration", () => {
+   it("moves stock, movements and orders to a Default variant in MAIN without losing anything", () => {
+     const db = v3Database();
+     migrateAppSchema(db);
+-    expect(db.pragma("user_version", { simple: true })).toBe(4);
++    expect(db.pragma("user_version", { simple: true })).toBe(5);
+ 
+     const main = db
+       .prepare<[], { id: string; name: string }>(
+diff --git a/apps/api/src/routes/cycle-counts.ts b/apps/api/src/routes/cycle-counts.ts
+new file mode 100644
+index 0000000..86d9d54
+--- /dev/null
++++ b/apps/api/src/routes/cycle-counts.ts
+@@ -0,0 +1,179 @@
++import { randomUUID } from "node:crypto";
++
++import { Hono } from "hono";
++import { z } from "zod";
++
++import type { DB } from "../db.js";
++import { applyMovement, findWarehouse, stockRow } from "../domain/inventory.js";
++import { idSchema, MAX_QUANTITY } from "../domain/validation.js";
++import { badRequest, conflict, notFound, readJson } from "../http.js";
++import type { Services } from "../services.js";
++import { requireAdmin, type AppEnv } from "../session.js";
++
++type CountStatus = "open" | "posted" | "cancelled";
++
++const startSchema = z.object({ warehouseId: idSchema });
++const countSchema = z.object({
++  counted: z
++    .number({ error: "Counted must be a whole number" })
++    .int("Counted must be a whole number")
++    .min(0, "Counted must be 0 or more")
++    .max(MAX_QUANTITY, "Counted must be at most 1,000,000"),
++});
++
++interface CountRow {
++  id: string;
++  warehouse_id: string;
++  status: CountStatus;
++  created_at: string;
++  posted_at: string | null;
++}
++
++interface LineRow {
++  variant_id: string;
++  sku: string;
++  expected: number;
++  counted: number | null;
++}
++
++function countRow(db: DB, id: string): CountRow {
++  const row = db
++    .prepare<[string], CountRow>(
++      "SELECT id, warehouse_id, status, created_at, posted_at FROM cycle_count WHERE id = ?",
++    )
++    .get(id);
++  if (!row) throw notFound("Cycle count not found");
++  return row;
++}
++
++function lines(db: DB, id: string): LineRow[] {
++  return db
++    .prepare<[string], LineRow>(
++      `SELECT l.variant_id, v.sku, l.expected, l.counted FROM cycle_count_line l
++       JOIN variant v ON v.id = l.variant_id WHERE l.count_id = ? ORDER BY v.sku`,
++    )
++    .all(id);
++}
++
++function loadCount(db: DB, id: string) {
++  const row = countRow(db, id);
++  return {
++    id: row.id,
++    warehouseId: row.warehouse_id,
++    status: row.status,
++    createdAt: row.created_at,
++    postedAt: row.posted_at,
++    lines: lines(db, id).map((l) => ({
++      variantId: l.variant_id,
++      sku: l.sku,
++      expected: l.expected,
++      counted: l.counted,
++    })),
++  };
++}
++
++export function cycleCountRoutes(services: Services) {
++  const { db } = services;
++  const app = new Hono<AppEnv>();
++
++  app.get("/", (c) =>
++    c.json(
++      db
++        .prepare<[], { id: string }>(
++          "SELECT id FROM cycle_count ORDER BY created_at DESC, rowid DESC",
++        )
++        .all()
++        .map(({ id }) => loadCount(db, id)),
++    ),
++  );
++
++  app.get("/:id", (c) => c.json(loadCount(db, c.req.param("id"))));
++
++  app.post("/", requireAdmin, async (c) => {
++    const { warehouseId } = await readJson(c, startSchema);
++    if (!findWarehouse(db, warehouseId)) throw badRequest(`Unknown warehouse ${warehouseId}`);
++    const id = randomUUID();
++    db.transaction(() => {
++      if (
++        db
++          .prepare("SELECT 1 FROM cycle_count WHERE warehouse_id = ? AND status = 'open'")
++          .get(warehouseId)
++      ) {
++        throw conflict("This warehouse already has an open cycle count");
++      }
++      db.prepare(
++        "INSERT INTO cycle_count (id, warehouse_id, status, created_by, created_at) VALUES (?, ?, 'open', ?, ?)",
++      ).run(id, warehouseId, c.get("user").id, services.now().toISOString());
++      db.prepare(
++        `INSERT INTO cycle_count_line (count_id, variant_id, expected)
++         SELECT ?, variant_id, on_hand FROM stock WHERE warehouse_id = ? AND (on_hand <> 0 OR reserved <> 0)`,
++      ).run(id, warehouseId);
++    }).immediate();
++    return c.json(loadCount(db, id), 201);
++  });
++
++  app.put("/:id/lines/:variantId", async (c) => {
++    const id = c.req.param("id");
++    const { counted } = await readJson(c, countSchema);
++    db.transaction(() => {
++      if (countRow(db, id).status !== "open") throw conflict("This cycle count is not open");
++      const res = db
++        .prepare("UPDATE cycle_count_line SET counted = ? WHERE count_id = ? AND variant_id = ?")
++        .run(counted, id, c.req.param("variantId"));
++      if (res.changes === 0) throw notFound("This variant is not part of the count");
++    }).immediate();
++    return c.json(loadCount(db, id));
++  });
++
++  app.post("/:id/post", requireAdmin, (c) => {
++    const id = c.req.param("id");
++    const userId = c.get("user").id;
++    db.transaction(() => {
++      const count = countRow(db, id);
++      if (count.status !== "open") throw conflict(`This cycle count is ${count.status}`);
++      const all = lines(db, id);
++      if (all.some((l) => l.counted === null)) throw badRequest("Every line must be counted first");
++      const at = services.now().toISOString();
++      for (const line of all) {
++        const counted = line.counted ?? 0;
++        const stock = stockRow(db, line.variant_id, count.warehouse_id);
++        if (counted < stock.reserved) {
++          throw conflict(
++            `${line.sku}: counted ${counted} is below the ${stock.reserved} reserved units`,
++          );
++        }
++        const delta = counted - stock.on_hand;
++        if (delta === 0) continue;
++        applyMovement(db, {
++          variantId: line.variant_id,
++          warehouseId: count.warehouse_id,
++          type: "adjustment",
++          quantity: delta,
++          unitCostCents: null,
++          reason: `Cycle count ${id}`,
++          orderId: null,
++          transferId: null,
++          userId,
++          at,
++        });
++      }
++      db.prepare("UPDATE cycle_count SET status = 'posted', posted_at = ? WHERE id = ?").run(
++        at,
++        id,
++      );
++    }).immediate();
++    return c.json(loadCount(db, id));
++  });
++
++  app.post("/:id/cancel", requireAdmin, (c) => {
++    const id = c.req.param("id");
++    db.transaction(() => {
++      const count = countRow(db, id);
++      if (count.status === "posted") throw conflict("A posted cycle count cannot be cancelled");
++      db.prepare("UPDATE cycle_count SET status = 'cancelled' WHERE id = ?").run(id);
++    }).immediate();
++    return c.json(loadCount(db, id));
++  });
++
++  return app;
++}
+diff --git a/apps/web/src/components/AppLayout.tsx b/apps/web/src/components/AppLayout.tsx
+index 0ce966b..d31f3fb 100644
+--- a/apps/web/src/components/AppLayout.tsx
++++ b/apps/web/src/components/AppLayout.tsx
+@@ -54,6 +54,9 @@ export function AppLayout() {
+             <Link to="/alerts" className={navClass} activeProps={activeProps}>
+               Alerts
+             </Link>
++            <Link to="/cycle-counts" className={navClass} activeProps={activeProps}>
++              Cycle counts
++            </Link>
+             {user?.role === "admin" && (
+               <>
+                 <Link to="/warehouses" className={navClass} activeProps={activeProps}>
+diff --git a/apps/web/src/router.tsx b/apps/web/src/router.tsx
+index e295abf..bd587fd 100644
+--- a/apps/web/src/router.tsx
++++ b/apps/web/src/router.tsx
+@@ -10,6 +10,7 @@ import {
+ import { AppLayout } from "./components/AppLayout.tsx";
+ import { meQuery, type User } from "./lib/auth.ts";
+ import { AlertsPage } from "./routes/alerts.tsx";
++import { CycleCountsPage } from "./routes/cycle-counts.tsx";
+ import { HomePage } from "./routes/home.tsx";
+ import { LoginPage } from "./routes/login.tsx";
+ import { OrderDetailPage } from "./routes/order-detail.tsx";
+@@ -128,6 +129,12 @@ const reportsRoute = createRoute({
+   component: ReportsPage,
+ });
+ 
++const cycleCountsRoute = createRoute({
++  getParentRoute: () => authedRoute,
++  path: "/cycle-counts",
++  component: CycleCountsPage,
++});
++
+ const usersRoute = createRoute({
+   getParentRoute: () => authedRoute,
+   path: "/users",
+@@ -149,6 +156,7 @@ const routeTree = rootRoute.addChildren([
+     transfersRoute,
+     warehousesRoute,
+     reportsRoute,
++    cycleCountsRoute,
+     usersRoute,
+   ]),
+ ]);
+diff --git a/apps/web/src/routes/cycle-counts.tsx b/apps/web/src/routes/cycle-counts.tsx
+new file mode 100644
+index 0000000..c8d33d5
+--- /dev/null
++++ b/apps/web/src/routes/cycle-counts.tsx
+@@ -0,0 +1,200 @@
++import { queryOptions, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
++import { useState } from "react";
++
++import { ErrorAlert, StatusMessage } from "@/components/Alert.tsx";
++import { Card, Loading, PageHeader } from "@/components/Page.tsx";
++import { PendingButton } from "@/components/PendingButton.tsx";
++import { SelectField } from "@/components/Select.tsx";
++import { cellClass, DataTable, EmptyState } from "@/components/Table.tsx";
++import { inputClass, primaryButton, secondaryButton } from "@/components/ui.ts";
++import { useAction } from "@/components/useAction.ts";
++import { api, errorMessage } from "@/lib/api.ts";
++import { meQuery } from "@/lib/auth.ts";
++import { warehousesQuery } from "@/lib/inventory.ts";
++
++interface CycleCount {
++  id: string;
++  warehouseId: string;
++  status: "open" | "posted" | "cancelled";
++  createdAt: string;
++  lines: { variantId: string; sku: string; expected: number; counted: number | null }[];
++}
++
++const countsQuery = queryOptions({
++  queryKey: ["cycle-counts"],
++  queryFn: () => api<CycleCount[]>("/api/cycle-counts"),
++});
++
++function OpenCount({
++  count,
++  warehouseName,
++  isAdmin,
++  onPosted,
++}: {
++  count: CycleCount;
++  warehouseName: string;
++  isAdmin: boolean;
++  onPosted: () => void;
++}) {
++  const queryClient = useQueryClient();
++  const [values, setValues] = useState<Record<string, string>>(() =>
++    Object.fromEntries(
++      count.lines.map((l) => [l.variantId, l.counted === null ? "" : String(l.counted)]),
++    ),
++  );
++  const save = useAction();
++  const post = useAction();
++  const refresh = () => queryClient.invalidateQueries();
++
++  const saveAll = async () => {
++    const filled = count.lines.filter((l) => (values[l.variantId] ?? "").trim() !== "");
++    await Promise.all(
++      filled.map((l) =>
++        api(`/api/cycle-counts/${count.id}/lines/${l.variantId}`, {
++          method: "PUT",
++          body: { counted: Number(values[l.variantId]) },
++        }),
++      ),
++    );
++  };
++
++  return (
++    <Card>
++      <h2 className="mb-3 text-lg font-semibold">Count in {warehouseName}</h2>
++      <DataTable
++        headers={["SKU", "Expected", "Counted"]}
++        empty={count.lines.length === 0 && <EmptyState>No stock in this warehouse</EmptyState>}
++      >
++        {count.lines.map((l) => (
++          <tr key={l.variantId}>
++            <td className={`${cellClass} font-mono`}>{l.sku}</td>
++            <td className={cellClass}>{l.expected}</td>
++            <td className={cellClass}>
++              <label htmlFor={`counted-${count.id}-${l.variantId}`} className="sr-only">
++                Counted {l.sku}
++              </label>
++              <input
++                id={`counted-${count.id}-${l.variantId}`}
++                type="number"
++                inputMode="numeric"
++                className={`${inputClass} max-w-28`}
++                value={values[l.variantId] ?? ""}
++                onChange={(e) => setValues((v) => ({ ...v, [l.variantId]: e.target.value }))}
++              />
++            </td>
++          </tr>
++        ))}
++      </DataTable>
++      <div className="mt-3 flex flex-col gap-2">
++        <ErrorAlert message={post.error ?? save.error} />
++        <StatusMessage message={save.success} />
++        <div className="flex flex-wrap gap-2">
++          <PendingButton
++            type="button"
++            pending={save.pending}
++            className={secondaryButton}
++            onClick={() => void save.run(() => saveAll().then(refresh), "Counts saved")}
++          >
++            Save counts
++          </PendingButton>
++          {isAdmin && (
++            <PendingButton
++              type="button"
++              pending={post.pending}
++              className={primaryButton}
++              onClick={() =>
++                void post.run(async () => {
++                  await saveAll();
++                  await api(`/api/cycle-counts/${count.id}/post`, { body: {} });
++                  onPosted();
++                  await refresh();
++                })
++              }
++            >
++              Post count
++            </PendingButton>
++          )}
++        </div>
++      </div>
++    </Card>
++  );
++}
++
++export function CycleCountsPage() {
++  const { data: user } = useSuspenseQuery(meQuery);
++  const isAdmin = user?.role === "admin";
++  const queryClient = useQueryClient();
++  const warehouses = useQuery(warehousesQuery);
++  const counts = useQuery(countsQuery);
++  const [warehouseId, setWarehouseId] = useState("");
++  const startAction = useAction();
++  const [notice, setNotice] = useState<string | null>(null);
++  const list = warehouses.data ?? [];
++  const selected = warehouseId || list[0]?.id || "";
++  const name = (id: string) => list.find((w) => w.id === id)?.name ?? id;
++
++  return (
++    <div>
++      <PageHeader title="Cycle counts" />
++      <div className="mb-4">
++        <StatusMessage message={notice} />
++      </div>
++      {isAdmin && (
++        <div className="mb-6 flex flex-wrap items-end gap-3">
++          <div className="w-full max-w-xs">
++            <SelectField
++              label="Warehouse"
++              value={selected}
++              onChange={(e) => setWarehouseId(e.target.value)}
++            >
++              {list.map((w) => (
++                <option key={w.id} value={w.id}>
++                  {w.name}
++                </option>
++              ))}
++            </SelectField>
++          </div>
++          <PendingButton
++            type="button"
++            pending={startAction.pending}
++            className={primaryButton}
++            onClick={() =>
++              void startAction.run(() =>
++                api("/api/cycle-counts", { body: { warehouseId: selected } }).then(() =>
++                  queryClient.invalidateQueries({ queryKey: ["cycle-counts"] }),
++                ),
++              )
++            }
++          >
++            Start count
++          </PendingButton>
++          <div className="w-full">
++            <ErrorAlert message={startAction.error} />
++          </div>
++        </div>
++      )}
++      {counts.isPending ? (
++        <Loading />
++      ) : counts.isError ? (
++        <ErrorAlert message={errorMessage(counts.error)} />
++      ) : (
++        <div className="flex flex-col gap-4">
++          {counts.data.filter((c) => c.status === "open").length === 0 && (
++            <p className="text-sm text-slate-500">No open counts</p>
++          )}
++          {counts.data
++            .filter((c) => c.status === "open")
++            .map((c) => (
++              <OpenCount
++                key={c.id}
++                count={c}
++                warehouseName={name(c.warehouseId)}
++                isAdmin={isAdmin}
++                onPosted={() => setNotice("Count posted")}
++              />
++            ))}
++        </div>
++      )}
++    </div>
++  );
++}

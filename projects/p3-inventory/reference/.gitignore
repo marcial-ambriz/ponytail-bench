@@ -1,0 +1,22 @@
+node_modules/
+dist/
+.turbo/
+coverage/
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+.DS_Store
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+e2e-results/
+# Claude Code
+.claude/settings.local.json

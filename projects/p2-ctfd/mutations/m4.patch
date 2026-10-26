@@ -1,0 +1,23 @@
+diff --git a/CTFd/utils/challenges/__init__.py b/CTFd/utils/challenges/__init__.py
+index 4c11ccb0..2d90fec2 100644
+--- a/CTFd/utils/challenges/__init__.py
++++ b/CTFd/utils/challenges/__init__.py
+@@ -152,15 +152,15 @@ def get_solve_counts_for_challenges(challenge_id=None, admin=False):
+     else:
+         freeze_cond = true()
+     exclude_solves_cond = and_(
+-        AccountModel.banned == false(),
+-        AccountModel.hidden == false(),
++        Users.banned == false(),
++        Users.hidden == false(),
+     )
+     solves_q = (
+         db.session.query(
+             Solves.challenge_id,
+             sa_func.count(Solves.challenge_id),
+         )
+-        .join(AccountModel, Solves.account_id == AccountModel.id)
++        .join(Users, Solves.user_id == Users.id)
+         .filter(*challenge_id_filter, freeze_cond, exclude_solves_cond)
+         .group_by(Solves.challenge_id)
+     )
