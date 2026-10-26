@@ -104,7 +104,22 @@ async function mainId(client) {
   return Array.isArray(json) ? json.find((w) => w.code === 'MAIN')?.id : undefined;
 }
 
+async function waitApi(timeoutMs = 90_000) {
+  // The web port can answer before its API proxy target; exit 75 (temporary) if the API never does.
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    try {
+      const res = await fetch(new URL('/api/auth/get-session', BASE_URL));
+      if (![502, 503, 504].includes(res.status)) return;
+    } catch {}
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  console.error(`API at ${BASE_URL} not answering after ${timeoutMs / 1000}s`);
+  process.exit(75);
+}
+
 async function main() {
+  await waitApi();
   const admin = await signIn('admin', ADMIN.email, ADMIN.password);
   const lower = TAG.toLowerCase();
   const clerk = DEMO

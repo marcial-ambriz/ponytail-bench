@@ -10,14 +10,18 @@ from .validator import machine_lock, sh
 
 SCRIPT = HARNESS / "capture-screens.mjs"
 SEED_WAITS = (5, 15, 30)  # a dev server answers on the web port before its API proxy target is up (pilot: 502s)
+SEED_TEMPFAIL = 75  # seeds exit EX_TEMPFAIL when the API never answered, before writing anything
 
 
 def run_seed(argv, cwd, env, log_path, waits=SEED_WAITS):
-    """Run the seed script, retrying after each wait; the result travels with the capture so C10 knows."""
+    """Run the seed script, retrying only temporary failures (a rerun after a real one would duplicate data);
+    the result travels with the capture so C10 knows."""
     for attempt in range(1, len(waits) + 2):
         code, _ = sh(argv, cwd, env, log=log_path)
         if code == 0:
             return {"ok": True, "attempts": attempt}
+        if code != SEED_TEMPFAIL:
+            return {"ok": False, "attempts": attempt}
         if attempt <= len(waits):
             time.sleep(waits[attempt - 1])
     return {"ok": False, "attempts": len(waits) + 1}
@@ -52,7 +56,8 @@ def capture(project, validator, wc, cp, ports, out_dir, log=print):
             return {"unavailable": f"app did not boot for capture: {err}"}
         seed = None
         if vis.get("seed"):
-            seed = run_seed(project.script_argv(vis["seed"]), project.dir, env, out_dir / "seed.log")
+            seed = run_seed(project.script_argv(vis["seed"]), project.dir, dict(env, CHECKPOINT=cp),
+                            out_dir / "seed.log")
             if not seed["ok"]:
                 log(f"visual seed failed after {seed['attempts']} attempts")
         cmd = [str(node), str(SCRIPT), str(out_dir / "screens.json"), env["BASE_URL"], str(out_dir)]

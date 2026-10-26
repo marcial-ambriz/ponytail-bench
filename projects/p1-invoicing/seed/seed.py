@@ -87,7 +87,20 @@ def account(role):
     return c
 
 
+def wait_api(timeout_s=90):
+    """The web port can answer before its API proxy target; exit 75 (temporary) if the API never does."""
+    t0 = time.time()
+    while time.time() - t0 < timeout_s:
+        status, _ = Client().req("GET", "/api/auth/get-session")
+        if status not in (0, 502, 503, 504):
+            return
+        time.sleep(1)
+    print(f"API at {BASE} not answering after {timeout_s}s", file=sys.stderr)
+    sys.exit(75)
+
+
 def main():
+    wait_api()
     summary = {"base": BASE, "password": PASSWORD, "users": {r: u[1] for r, u in USERS.items()}, "skipped": []}
     owner = account("owner")
     members = {r: account(r) for r in ("accountant", "viewer", "newcomer")}
@@ -191,7 +204,8 @@ def main():
         csv = "name,email\nIris Imports,iris@imports.test\n\"Juniper, Kale & Co\",jk@juniper.test\n"
         ok(members["accountant"].req("POST", f"{base}/imports/customers", raw=csv.encode(), headers={"Content-Type": "text/csv"}), 201)
 
-    stage("imports", imports)
+    if os.environ.get("CHECKPOINT", "cp5") >= "cp4":  # imports exist from cp4; earlier apps may answer 403
+        stage("imports", imports)
     print(json.dumps(summary, indent=2))
     return 0
 
