@@ -2,12 +2,25 @@
 
 import json
 import shutil
+import time
 from pathlib import Path
 
 from .config import HARNESS, NODE_BIN, PLAYWRIGHT_DIR
 from .validator import machine_lock, sh
 
 SCRIPT = HARNESS / "capture-screens.mjs"
+SEED_WAITS = (5, 15, 30)  # a dev server answers on the web port before its API proxy target is up (pilot: 502s)
+
+
+def run_seed(argv, cwd, env, log_path, waits=SEED_WAITS):
+    """Run the seed script, retrying after each wait; the result travels with the capture so C10 knows."""
+    for attempt in range(1, len(waits) + 2):
+        code, _ = sh(argv, cwd, env, log=log_path)
+        if code == 0:
+            return {"ok": True, "attempts": attempt}
+        if attempt <= len(waits):
+            time.sleep(waits[attempt - 1])
+    return {"ok": False, "attempts": len(waits) + 1}
 
 
 def screens_for(project, cp):
@@ -37,10 +50,11 @@ def capture(project, validator, wc, cp, ports, out_dir, log=print):
             validator.app(wc, ports, db, out_dir) as (booted, env, err):
         if not booted:
             return {"unavailable": f"app did not boot for capture: {err}"}
+        seed = None
         if vis.get("seed"):
-            code, out = sh(project.script_argv(vis["seed"]), project.dir, env, log=out_dir / "seed.log")
-            if code != 0:
-                log(f"visual seed failed (exit {code})")
+            seed = run_seed(project.script_argv(vis["seed"]), project.dir, env, out_dir / "seed.log")
+            if not seed["ok"]:
+                log(f"visual seed failed after {seed['attempts']} attempts")
         cmd = [str(node), str(SCRIPT), str(out_dir / "screens.json"), env["BASE_URL"], str(out_dir)]
         if vis.get("auth"):
             cmd.append(str(project.path(vis["auth"])))
@@ -50,4 +64,4 @@ def capture(project, validator, wc, cp, ports, out_dir, log=print):
     if code != 0 or not idx.exists():
         return {"unavailable": f"capture failed (exit {code}): {out[-300:]}"}
     data = json.loads(idx.read_text())
-    return {"screens": len(data["screens"]), "checks": data["summary"], "index": str(idx)}
+    return {"screens": len(data["screens"]), "checks": data["summary"], "index": str(idx), "seed": seed}
