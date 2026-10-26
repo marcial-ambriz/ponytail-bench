@@ -165,6 +165,7 @@ def cmd_preflight(a):
             cfg = with_tmp / prov / arm
             shutil.rmtree(cfg, ignore_errors=True)
             arms.install(arm, prov, cfg)
+            cfg.mkdir(parents=True, exist_ok=True)
             home = with_tmp / prov / f"{arm}-home"
             home.mkdir(parents=True, exist_ok=True)
             if prov == "claude":
