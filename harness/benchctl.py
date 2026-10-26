@@ -316,7 +316,10 @@ def all_states(paths=None):
 
 
 def cmd_post(a):
+    global PATHS
     fz = require_freeze()
+    if a.pilot:
+        PATHS = Paths(root=HARNESS / ".pilot", frozen_root=PATHS.root)
     projects = load_projects(list(fz["suites"]))
     prices = usage.load_prices(PATHS.frozen / "prices.json")
     lg, guard = ledger_guard()
@@ -552,6 +555,7 @@ def main(argv=None):
     r.add_argument("--publish", action="store_true")
     po = sub.add_parser("post")
     po.add_argument("run_ids", nargs="*")
+    po.add_argument("--pilot", action="store_true")
     j = sub.add_parser("judge")
     j.add_argument("action", choices=["prepare", "run"])
     j.add_argument("--kind", choices=["code", "visual"], default="code")
