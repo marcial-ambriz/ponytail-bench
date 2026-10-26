@@ -1,0 +1,193 @@
+{
+  "frozen_at": "2026-10-26T17:25:51+00:00",
+  "commit": "b1fa688d9537465a3422f3bd067d258fb3287319",
+  "seed": 12824677846194013786,
+  "suites": {
+    "p1-invoicing": "92d0b7a6ef71d82f9ea2e3ba37dba492732b75fdd306e996aa9d4c71e0d7090b",
+    "p2-ctfd": "90f3030d9fdbda2100cd52600c41242d77784c0029c877d115fc07f12fb24006",
+    "p3-inventory": "94fa815d268811981e4912f582a3f59db608f16ea4f589bca1ca781b5186ba9e"
+  },
+  "prices_sha256": "63f372fabbc5a475172e33a0e941605d1f1d90099550debc43327f023bb24e54",
+  "skills": {
+    "ponytail": {
+      "path": "ponytail/SKILL.md",
+      "sha256": "3d413849a55a3bdd8b01c860b5ae4a2f2b0cacfe1bfc0c97439ecc05e92219d7",
+      "bytes": 6660,
+      "words": 1080,
+      "source": "~/Projects/ponytail-bench-worktrees/.state/<run>/{claude-config,codex-home}/skills/ponytail/SKILL.md (round 1 install of the EngineeringSuite Ponytail plugin v2.0.0; identical in all 4 skill runs)"
+    },
+    "steady": {
+      "path": "steady/SKILL.md",
+      "sha256": "fa9e6002a1b4d11e37272117812c4bd476e33434c952c0d6415c3bdfe86abff9",
+      "bytes": 6335,
+      "words": 1083,
+      "source": "plan/placebo-SKILL.md"
+    }
+  },
+  "harness_sha256": "7ca4068f08cbc5ab5ab06490ba781985765c255660d7670589b06aa93a8975d5",
+  "alias_map_sha256": "d154a65a678e7f58249415257cb6f46b2f3abb15e8ddd2f15e8e5f3ee4bade34",
+  "schedule": [
+    {
+      "block_id": "p1-invoicing-sonnet-r1",
+      "rep": 1,
+      "arm_order": [
+        "base",
+        "placebo",
+        "ponytail"
+      ]
+    },
+    {
+      "block_id": "p2-ctfd-luna-r1",
+      "rep": 1,
+      "arm_order": [
+        "base",
+        "placebo",
+        "ponytail"
+      ]
+    },
+    {
+      "block_id": "p2-ctfd-sonnet-r1",
+      "rep": 1,
+      "arm_order": [
+        "base",
+        "ponytail",
+        "placebo"
+      ]
+    },
+    {
+      "block_id": "p1-invoicing-luna-r1",
+      "rep": 1,
+      "arm_order": [
+        "base",
+        "ponytail",
+        "placebo"
+      ]
+    },
+    {
+      "block_id": "p3-inventory-luna-r1",
+      "rep": 1,
+      "arm_order": [
+        "base",
+        "placebo",
+        "ponytail"
+      ]
+    },
+    {
+      "block_id": "p3-inventory-sonnet-r1",
+      "rep": 1,
+      "arm_order": [
+        "ponytail",
+        "placebo",
+        "base"
+      ]
+    },
+    {
+      "block_id": "p2-ctfd-luna-r2",
+      "rep": 2,
+      "arm_order": [
+        "ponytail",
+        "placebo",
+        "base"
+      ]
+    },
+    {
+      "block_id": "p2-ctfd-sonnet-r2",
+      "rep": 2,
+      "arm_order": [
+        "base",
+        "placebo",
+        "ponytail"
+      ]
+    },
+    {
+      "block_id": "p1-invoicing-sonnet-r2",
+      "rep": 2,
+      "arm_order": [
+        "ponytail",
+        "base",
+        "placebo"
+      ]
+    },
+    {
+      "block_id": "p3-inventory-sonnet-r2",
+      "rep": 2,
+      "arm_order": [
+        "base",
+        "placebo",
+        "ponytail"
+      ]
+    },
+    {
+      "block_id": "p3-inventory-luna-r2",
+      "rep": 2,
+      "arm_order": [
+        "placebo",
+        "ponytail",
+        "base"
+      ]
+    },
+    {
+      "block_id": "p1-invoicing-luna-r2",
+      "rep": 2,
+      "arm_order": [
+        "base",
+        "ponytail",
+        "placebo"
+      ]
+    },
+    {
+      "block_id": "p1-invoicing-sonnet-r3",
+      "rep": 3,
+      "arm_order": [
+        "base",
+        "ponytail",
+        "placebo"
+      ]
+    },
+    {
+      "block_id": "p1-invoicing-luna-r3",
+      "rep": 3,
+      "arm_order": [
+        "ponytail",
+        "placebo",
+        "base"
+      ]
+    },
+    {
+      "block_id": "p2-ctfd-sonnet-r3",
+      "rep": 3,
+      "arm_order": [
+        "placebo",
+        "base",
+        "ponytail"
+      ]
+    },
+    {
+      "block_id": "p2-ctfd-luna-r3",
+      "rep": 3,
+      "arm_order": [
+        "ponytail",
+        "base",
+        "placebo"
+      ]
+    },
+    {
+      "block_id": "p3-inventory-luna-r3",
+      "rep": 3,
+      "arm_order": [
+        "placebo",
+        "ponytail",
+        "base"
+      ]
+    },
+    {
+      "block_id": "p3-inventory-sonnet-r3",
+      "rep": 3,
+      "arm_order": [
+        "placebo",
+        "base",
+        "ponytail"
+      ]
+    }
+  ]
+}

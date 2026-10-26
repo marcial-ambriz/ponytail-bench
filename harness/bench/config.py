@@ -54,6 +54,7 @@ def global_dir():
 class Paths:
     root: Path = HARNESS
     port_base: Optional[int] = None
+    frozen_root: Optional[Path] = None  # pilot runs keep their own state but read the study's frozen files
 
     def __post_init__(self):
         self.root = Path(self.root)
@@ -72,7 +73,7 @@ class Paths:
 
     @property
     def frozen(self):
-        return self.root / "frozen"
+        return Path(self.frozen_root or self.root) / "frozen"
 
     def run_state(self, run_id):
         return self.state / run_id

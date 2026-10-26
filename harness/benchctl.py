@@ -261,7 +261,7 @@ def cmd_run(a):
         if not (a.model and a.project):
             sys.exit("--pilot needs --model and --project (1 model x 1 project x 3 arms)")
         sched = frozen_schedule(fz, [a.model], [a.project], [1])
-        PATHS = Paths(root=HARNESS / ".pilot")  # pilot runs keep their own states; spend goes to the main ledger
+        PATHS = Paths(root=HARNESS / ".pilot", frozen_root=PATHS.root)  # own states; main frozen files and ledger
     else:
         sched = frozen_schedule(fz)
     if a.blocks:
