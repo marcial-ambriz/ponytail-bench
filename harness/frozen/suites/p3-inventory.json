@@ -134,7 +134,7 @@
     "reference/pnpm-workspace.yaml": "382efef19bb55c3603bda201528602cdf9127a48326fb7f7386909fbb1e1ec0b",
     "reference/turbo.json": "4a27a75bc7c89c7615a5e1f3dcae408cc153495cac46ae313140b28885a9f9c4",
     "screens.json": "77d2fb17cf2b52165886440ec908063bf38eafca83173b7e48e829223834ecf8",
-    "seed/seed.mjs": "69314baa330a2a0dc9b645a0a97d5e33bffa569e16dfe9844cb9b2ff8d596bcd",
+    "seed/seed.mjs": "eaee23a4d83fa8888b3f41fb382a786e49e3e6e791160a5c9983ead5c9e04d31",
     "stages/README.md": "5d45c4affe5eb30573452d9b96bd253580806d696c270f71fa2aba5ecc2509cd",
     "stages/cp3.patch": "806abfd8d8e789f266dbe406bce070b1ca1396f30845699904267ed7c07f6e04",
     "tools/anchors.mjs": "e3392ecd3c5458a5c707dd22237d2fcca0147374bbff86e6d511de1ac2aa4aec",
@@ -148,5 +148,5 @@
     "visual/auth.mjs": "36a637fce22a410511a07ba41f3d16138a87d255e50912891d41fb9e3f947119"
   },
   "project": "p3-inventory",
-  "sha256": "94fa815d268811981e4912f582a3f59db608f16ea4f589bca1ca781b5186ba9e"
+  "sha256": "c721bae13322c511dc517cbcd66a2906274e9749986db14608bec50e8f24798e"
 }

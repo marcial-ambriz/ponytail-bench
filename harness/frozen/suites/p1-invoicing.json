@@ -113,7 +113,7 @@
     "reference/pnpm-workspace.yaml": "81d3f57fa374febd07946a8a6aa84a6bc3336f57ba734cef47a16f2d3e5304c0",
     "reference/turbo.json": "4a27a75bc7c89c7615a5e1f3dcae408cc153495cac46ae313140b28885a9f9c4",
     "screens.json": "720c419f42004bab701402f51d103959dad395966b1f5f4cb11cb22673a310ac",
-    "seed/seed.py": "e29f6d6e94d2c03fc1c712c37df9a31ac0f12572a4f3d993e76621a7318991a9",
+    "seed/seed.py": "05cafe7848b954a669cd0696fa93e7d8bae0e93fd9dda7a5715447abb6961ffd",
     "support/api.ts": "4368185e5fe53926eb7d58dcc069cb48bd92e1ad7d486ce930cf7ac43d3ebd89",
     "support/index.ts": "15bacb39f19190d23e6003c52ae4fd8072d486c6acfb2f21ec4343eaceb8de46",
     "support/run-suite.sh": "f35041914f62b38de4840cbad6372309e811339ae17c02d7bb6c16d33a009184",
@@ -127,5 +127,5 @@
     "visual/auth.mjs": "9ff8835304b2e61a4b32b7e2706cd7d6a8cdac5d28c910172b218983f7e1b283"
   },
   "project": "p1-invoicing",
-  "sha256": "92d0b7a6ef71d82f9ea2e3ba37dba492732b75fdd306e996aa9d4c71e0d7090b"
+  "sha256": "96fabed8bafce6e016b9baa99b06835cc8b19294e9e7392add36bc586ab0712f"
 }

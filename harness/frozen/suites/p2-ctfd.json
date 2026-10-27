@@ -41,7 +41,7 @@
     "mutations/m2.patch": "c3879a387b4e21893883b100e79ba03291edbd4fbed5ccb28d8d12b714a6af66",
     "mutations/m3.patch": "482f45f5cf576790f5c41f5f474ba27ca8f14f2e462b86f19a7221c3edd14c92",
     "mutations/m4.patch": "343a79d7e11ad5d5b833be32da9e168b5de3a2f2e40d3120683757964924cdb7",
-    "project.json": "c261cfe9100250dddb79b5d5858b6d65f2efd691cf92e33d64c3ff2c8e44ae1f",
+    "project.json": "b855b0f9f9155a00baa65e552ba506ef1cfb40b2bef8b76159ef41c8c2da41dd",
     "reference/CTFd/api/v1/challenges.py": "8dcdd00b24234ba88a6be48be73b408596a21d3b9f1bffff2d17ed80c276d8f8",
     "reference/CTFd/api/v1/submissions.py": "c5d86937028dff8030b2957855525a02cdc34b61119cbc7a03e3230d45838536",
     "reference/CTFd/auth.py": "e9e647d3de2b9a10f9efba61ae41d83d4cbdf755c6f4b5773bcc8d7ecf7094d8",
@@ -78,5 +78,5 @@
     "visual/auth.mjs": "3c1517a0f8275de584b53d2ecc14d1a92a379ebeb505115a9421a9ad7364d9df"
   },
   "project": "p2-ctfd",
-  "sha256": "90f3030d9fdbda2100cd52600c41242d77784c0029c877d115fc07f12fb24006"
+  "sha256": "5720b768f22a362533fddffad59f00ec78e800ec3df48306793cdb62e64af433"
 }
